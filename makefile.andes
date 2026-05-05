@@ -1,0 +1,50 @@
+# ============================================================
+# makefile.andes — CCDT build for Andes (OLCF)
+# ============================================================
+
+# --- HDF5 ---
+HDF5_INCLUDEDIR = ${HDF5_DIR}/include
+HDF5_LIBDIR = ${HDF5_DIR}/lib
+HDF5_INCLUDE = -I${HDF5_INCLUDEDIR}
+HDF5_LIBS = -L${HDF5_LIBDIR} ${HDF5_LIBDIR}/libhdf5hl_fortran.a ${HDF5_LIBDIR}/libhdf5_hl.a ${HDF5_LIBDIR}/libhdf5_fortran.a ${HDF5_LIBDIR}/libhdf5.a -ldl -lm -lz -Wl,-rpath -Wl,${HDF5_LIBDIR}
+LIB = -lrt -lm
+LIBS = -lopenblas ${HDF5_LIBS} ${LIB} -lgsl
+
+# --- Base compiler flags (always on) ---
+#   -fopenmp                  : OpenMP threading
+#   -ffree-line-length-0      : no line length limit
+#   -fallow-argument-mismatch : required for MPI F77 interface with gfortran 10+
+#   -frecursive               : CRITICAL — each thread gets its own stack frame
+#                                for local variables. Without this, gfortran may
+#                                use static storage for locals, causing silent
+#                                data corruption between threads. -fopenmp implies
+#                                this in GCC 10+ but we set it explicitly.
+#   -fno-stack-arrays         : forces large automatic arrays to heap instead of
+#                                stack. Prevents stack overflow when 32+ threads
+#                                each need large local arrays in subroutines.
+COMP = mpif90 -fopenmp -ffree-line-length-0 -fallow-argument-mismatch -frecursive -fno-stack-arrays
+
+# --- Debug flags ---
+#   -O0                       : no optimization (predictable debugging)
+#   -g                        : debug symbols
+#   -fcheck=all               : runtime bounds, pointer, and shape checking
+#   -fbacktrace               : stack trace on crash
+#   -ffpe-trap=...            : trap floating point exceptions (NOT underflow/denormal
+#                                which fire on legitimate near-zero CC amplitudes)
+#   -Wall                     : all warnings
+#   -finit-real=snan          : initialize reals to signaling NaN (catches uninitialized use)
+#   -finit-integer=-999       : initialize integers to -999 (catches uninitialized use)
+FCD = ${COMP} -O0 -g -fcheck=all -fbacktrace -ffpe-trap=invalid,zero,overflow -Wall -finit-real=snan -finit-integer=-999
+
+# --- Release flags ---
+#   -O2                       : safe optimization (O3 can reorder floating point)
+FC  = ${COMP} -O2
+
+# Default: debug. Use MODE=release for production.
+ifeq ($(MODE),release)
+  XLF = ${FC} ${HDF5_INCLUDE}
+else
+  XLF = ${FCD} ${HDF5_INCLUDE}
+endif
+
+include makefile.common

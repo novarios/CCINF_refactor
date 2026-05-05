@@ -1,0 +1,13 @@
+all_objects = modules.o build_status.o mem_tracker.o contracts.o mpi_check.o hdf5_routines.o chiral_module_andreas_sam.o mappings.o library.o test.o diis.o paeom_routines.o paeom_diagrams.o preom_routines.o preom_diagrams.o eom_states.o hbar_diagrams.o ground_state_routines.o mbpt.o t3_diagrams.o ground_state.o energy.o interaction.o basis.o ccdt_main.o
+
+ccdt.exe : ${all_objects}
+	${XLF} -o ccdt.exe ${all_objects} ${LIBS}
+
+%.o: %.f90
+	${XLF} -c $<
+
+%.o: %.f
+	${XLF} -c $<
+
+clean:
+	rm *.mod *.exe *.o *__genmod.f90

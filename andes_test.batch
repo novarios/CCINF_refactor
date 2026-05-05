@@ -1,0 +1,104 @@
+#!/bin/bash
+#SBATCH -A nph123
+#SBATCH -J ccdt_run
+#SBATCH -N 64
+#SBATCH -t 3:00:00
+#SBATCH --no-requeue
+#SBATCH --exclusive
+#SBATCH --mem=0
+#SBATCH -o %x_%j.out
+#SBATCH -e %x_%j.err
+
+# ============================================================
+# Modules — must match build
+# ============================================================
+module load gcc
+module load openmpi
+module load openblas
+module load hdf5
+module load gsl
+
+# ============================================================
+# System limits
+# ============================================================
+ulimit -s unlimited        # unlimited stack for main thread
+ulimit -c unlimited        # enable core dumps for crash diagnosis
+
+# ============================================================
+# OpenMP configuration
+#   Andes: 2x AMD EPYC 7302 = 32 cores per node
+#   Layout: 2 MPI ranks/node x 16 threads/rank = 32 cores
+# ============================================================
+export OMP_NUM_THREADS=16
+export OMP_STACKSIZE=128M  # per-thread stack — default 4MB is too small for T3
+export OMP_PLACES=cores
+export OMP_PROC_BIND=close
+export OMP_DISPLAY_ENV=VERBOSE  # prints thread config at startup — verify then remove
+
+# ============================================================
+# Run parameters — edit these
+# ============================================================
+NODES=64
+RANKS_PER_NODE=2
+TOTAL_RANKS=$((NODES * RANKS_PER_NODE))
+CPUS_PER_RANK=${OMP_NUM_THREADS}
+
+# Physics parameters
+NMAX=14
+NOCC=8
+POCC=8
+RHO=0.16
+CC_FILE="'nnlosat'"
+CC_APPROX=2
+TNF_APPROX=1
+T3_CUT=18
+
+# Output label
+LABEL="snm_nnlosat_${RHO}_${NOCC}${POCC}_${NMAX}_ccdt${T3_CUT}"
+
+# ============================================================
+# Working directory
+# ============================================================
+WORKDIR=/lustre/orion/scratch/novarios/nph123/CCINF
+cd ${WORKDIR}
+
+# ============================================================
+# Pre-flight checks
+# ============================================================
+echo "=== CCDT Run: ${LABEL} ==="
+echo "  Date:       $(date)"
+echo "  Nodes:      ${NODES}"
+echo "  MPI ranks:  ${TOTAL_RANKS} (${RANKS_PER_NODE}/node)"
+echo "  Threads:    ${OMP_NUM_THREADS}/rank"
+echo "  Total cores: $((TOTAL_RANKS * CPUS_PER_RANK))"
+echo "  Stack size: ${OMP_STACKSIZE}"
+echo "  Executable: $(ls -la ccdt.exe)"
+echo ""
+
+if [ ! -f ccdt.exe ]; then
+    echo "ERROR: ccdt.exe not found in ${WORKDIR}"
+    exit 1
+fi
+
+# ============================================================
+# Run
+# ============================================================
+srun --nodes=${NODES} \
+     --ntasks=${TOTAL_RANKS} \
+     --ntasks-per-node=${RANKS_PER_NODE} \
+     --cpus-per-task=${CPUS_PER_RANK} \
+     --cpu-bind=cores \
+     ./ccdt.exe \
+         cc_file="${CC_FILE}" \
+         Nmax=${NMAX} \
+         rho=${RHO} \
+         Nocc=${NOCC} \
+         Pocc=${POCC} \
+         tnf_approx=${TNF_APPROX} \
+         cc_approx=${CC_APPROX} \
+         t3_cut=${T3_CUT} \
+     > ${LABEL}.out 2>&1
+
+echo ""
+echo "=== Finished: $(date) ==="
+echo "  Output: ${LABEL}.out"
