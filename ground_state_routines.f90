@@ -10,8 +10,8 @@ SUBROUTINE setup_t_amplitudes
   USE build_status
   USE contracts
   USE mem_tracker
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   INTEGER :: ch, bra_confs,ket_confs, bra,ket, ndim
   INTEGER :: a,b,i,j
@@ -98,8 +98,8 @@ SUBROUTINE setup_t3_amplitudes(fill)
   USE contracts
   use iso_fortran_env, only: error_unit
   USE mem_tracker
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   LOGICAL, INTENT(IN) :: fill
   INTEGER :: number_channels, ch3, ch1,ch2
@@ -380,7 +380,45 @@ SUBROUTINE setup_t3_amplitudes(fill)
   CALL setup_proc_mappings1_t3
   CALL mem_report('T3 structures')
 
-
+  ! Pre-flight memory check: estimate this rank's T3 allocation
+  ! before committing. Linux overcommit means ALLOCATE(stat=) can
+  ! succeed even when physical memory is insufficient — the OOM
+  ! killer fires later when the memory is touched. This check
+  ! catches that scenario with a clear error message.
+  total = 0
+  DO ch3 = ch3_min, ch3_max
+     IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
+     DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
+        c       = clist_t3(ch3)%ival2(cind1,1)
+        ch1     = clist_t3(ch3)%ival2(cind1,2)
+        IF ( c <= 0 .or. ch1 <= 0 ) cycle
+        bra_min = mapping_t3(ch3)%ival2(cind1,1)
+        bra_max = mapping_t3(ch3)%ival2(cind1,2)
+        IF ( bra_min <= 0 .or. bra_min > bra_max ) cycle
+        nrow = bra_max - bra_min + 1
+        DO kind1 = 1, klimit_t3(ch3)
+           k   = klist_t3(ch3)%ival2(kind1,1)
+           ch2 = klist_t3(ch3)%ival2(kind1,2)
+           IF ( k <= 0 .or. ch2 <= 0 ) cycle
+           ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
+           IF ( ket_confs <= 0 ) cycle
+           total = total + int(nrow,8) * int(ket_confs,8)
+        END DO
+     END DO
+  END DO
+  IF ( iam == 0 ) THEN
+     write(6,'(A,F12.2,A)') '  T3 total memory estimate:  ', &
+          REAL(ndim3,dp) * 16.0_dp / 1.0e9_dp, ' GB (all ranks)'
+  END IF
+  nelem = total  ! save local for allreduce
+  CALL mpi_allreduce(total, nelem, 1, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, ierror)
+  IF ( iam == 0 ) THEN
+     write(6,'(A,F12.2,A)') '  T3 max rank needs:         ', &
+          REAL(nelem,dp) * 16.0_dp / 1.0e9_dp, ' GB'
+     write(6,'(A,F12.2,A)') '  Already allocated:         ', &
+          mem_total_local() / 1.0e9_dp, ' GB'
+     write(6,*)
+  END IF
 
   ALLOCATE( t3_ccm(ch3_min:ch3_max) )
   IF ( tnf_approx > 1 ) ALLOCATE( t3_ccm0(ch3_min:ch3_max) )
@@ -546,8 +584,8 @@ SUBROUTINE deallocate_t3_amplitudes
   USE ang_mom_functions
   USE chiral_potentials
   USE build_status
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   INTEGER :: ch3, cind1,kind1
     
@@ -611,8 +649,8 @@ SUBROUTINE setup_t3_mbpt
   USE ang_mom_functions
   USE chiral_potentials
   USE mem_tracker
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   INTEGER :: number_channels, ch3, ch1,ch2
   INTEGER :: bra_min,bra_max, k1,k2,k3,k4
@@ -825,8 +863,8 @@ SUBROUTINE t2_cross_recouple
   USE constants
   USE operator_storage
   USE ang_mom_functions
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   INTEGER :: ch, ch_t2, bra_confs,ket_confs, bra_min,bra_max
   INTEGER :: bra,ket, t2bra,t2ket, phase
@@ -885,8 +923,8 @@ SUBROUTINE t2_add_cross
   USE constants
   USE operator_storage
   USE ang_mom_functions
-  USE mpi_check
   
+  USE mpi_check
   IMPLICIT NONE
   INTEGER :: ch, ch_t2
   INTEGER :: bra_confs,ket_confs, bra_min,bra_max
@@ -982,9 +1020,9 @@ SUBROUTINE print_gs_hdf5
   USE operator_storage
   USE hdf5_wrapper
   USE hdf5
+    
   USE mpi_check
-  
-  IMPLICIT NONE
+  IMPLICIT NONE  
   INTEGER :: ch, error, bra_confs,ket_confs
   INTEGER(HID_T) :: file_id
   REAL(dp), ALLOCATABLE :: t2_amp(:,:)
@@ -1060,9 +1098,7 @@ SUBROUTINE read_gs_hdf5
   USE operator_storage
   USE hdf5_wrapper
   USE hdf5
-  USE mpi_check
 
-  IMPLICIT NONE
   INTEGER :: cc_approx0, t3_cut0
   INTEGER :: ch, error, bra,ket, bra_confs,ket_confs
   INTEGER(HID_T) :: file_id
