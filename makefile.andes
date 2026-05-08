@@ -13,7 +13,7 @@ LIBS = -lopenblas ${HDF5_LIBS} ${LIB} -lgsl
 # --- Base compiler flags (always on) ---
 #   -fopenmp                  : OpenMP threading
 #   -ffree-line-length-0      : no line length limit
-#   -fallow-argument-mismatch : required for MPI F77 interface with gfortran 10+
+#   -Wno-argument-mismatch : required for MPI F77 interface with gfortran 10+
 #   -frecursive               : CRITICAL — each thread gets its own stack frame
 #                                for local variables. Without this, gfortran may
 #                                use static storage for locals, causing silent
@@ -22,7 +22,7 @@ LIBS = -lopenblas ${HDF5_LIBS} ${LIB} -lgsl
 #   -fno-stack-arrays         : forces large automatic arrays to heap instead of
 #                                stack. Prevents stack overflow when 32+ threads
 #                                each need large local arrays in subroutines.
-COMP = mpif90 -fopenmp -ffree-line-length-0 -fallow-argument-mismatch -frecursive -fno-stack-arrays
+COMP = mpif90 -fopenmp -ffree-line-length-0 -Wno-argument-mismatch -frecursive -fno-stack-arrays
 
 # --- Debug flags ---
 #   -O0                       : no optimization (predictable debugging)
