@@ -10,8 +10,8 @@ SUBROUTINE setup_t_amplitudes
   USE build_status
   USE contracts
   USE mem_tracker
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch, bra_confs,ket_confs, bra,ket, ndim
   INTEGER :: a,b,i,j
@@ -98,8 +98,8 @@ SUBROUTINE setup_t3_amplitudes(fill)
   USE contracts
   use iso_fortran_env, only: error_unit
   USE mem_tracker
-  
   USE mpi_check
+  
   IMPLICIT NONE
   LOGICAL, INTENT(IN) :: fill
   INTEGER :: number_channels, ch3, ch1,ch2
@@ -427,6 +427,15 @@ SUBROUTINE setup_t3_amplitudes(fill)
      IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
      ALLOCATE( t3_ccm(ch3)%val2(climits_t3(ch3,1):climits_t3(ch3,2), klimit_t3(ch3)) )
      ALLOCATE( t3_ccm(ch3)%pack1(climits_t3(ch3,1):climits_t3(ch3,2)) )
+     ! Nullify all pointer components — Fortran does NOT auto-nullify
+     ! pointer components of allocated derived types. Without this,
+     ! ASSOCIATED() returns undefined results on unset entries.
+     DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
+        NULLIFY( t3_ccm(ch3)%pack1(cind1)%buf )
+        DO kind1 = 1, klimit_t3(ch3)
+           NULLIFY( t3_ccm(ch3)%val2(cind1,kind1)%cval )
+        END DO
+     END DO
      
      DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
         c       = clist_t3(ch3)%ival2(cind1,1)
@@ -490,6 +499,12 @@ SUBROUTINE setup_t3_amplitudes(fill)
         IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
         ALLOCATE( t3_ccm0(ch3)%val2(climits_t3(ch3,1):climits_t3(ch3,2), klimit_t3(ch3)) )
         ALLOCATE( t3_ccm0(ch3)%pack1(climits_t3(ch3,1):climits_t3(ch3,2)) )
+        DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
+           NULLIFY( t3_ccm0(ch3)%pack1(cind1)%buf )
+           DO kind1 = 1, klimit_t3(ch3)
+              NULLIFY( t3_ccm0(ch3)%val2(cind1,kind1)%cval )
+           END DO
+        END DO
 
         DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
            c       = clist_t3(ch3)%ival2(cind1,1)
@@ -584,8 +599,8 @@ SUBROUTINE deallocate_t3_amplitudes
   USE ang_mom_functions
   USE chiral_potentials
   USE build_status
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch3, cind1,kind1
     
@@ -649,8 +664,8 @@ SUBROUTINE setup_t3_mbpt
   USE ang_mom_functions
   USE chiral_potentials
   USE mem_tracker
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: number_channels, ch3, ch1,ch2
   INTEGER :: bra_min,bra_max, k1,k2,k3,k4
@@ -863,8 +878,8 @@ SUBROUTINE t2_cross_recouple
   USE constants
   USE operator_storage
   USE ang_mom_functions
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch, ch_t2, bra_confs,ket_confs, bra_min,bra_max
   INTEGER :: bra,ket, t2bra,t2ket, phase
@@ -923,8 +938,8 @@ SUBROUTINE t2_add_cross
   USE constants
   USE operator_storage
   USE ang_mom_functions
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch, ch_t2
   INTEGER :: bra_confs,ket_confs, bra_min,bra_max
@@ -1020,9 +1035,9 @@ SUBROUTINE print_gs_hdf5
   USE operator_storage
   USE hdf5_wrapper
   USE hdf5
-    
   USE mpi_check
-  IMPLICIT NONE  
+  
+  IMPLICIT NONE
   INTEGER :: ch, error, bra_confs,ket_confs
   INTEGER(HID_T) :: file_id
   REAL(dp), ALLOCATABLE :: t2_amp(:,:)
@@ -1098,7 +1113,9 @@ SUBROUTINE read_gs_hdf5
   USE operator_storage
   USE hdf5_wrapper
   USE hdf5
+  USE mpi_check
 
+  IMPLICIT NONE
   INTEGER :: cc_approx0, t3_cut0
   INTEGER :: ch, error, bra,ket, bra_confs,ket_confs
   INTEGER(HID_T) :: file_id
