@@ -651,7 +651,6 @@ SUBROUTINE t3_eqn
         
         !$omp parallel default(shared) private(bra,bra0,a,b, phase_ab,bra_ab,ch_ab, kind1,k,ch2)
         !$omp do schedule(dynamic)
-
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
               IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
@@ -673,8 +672,7 @@ SUBROUTINE t3_eqn
               CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
-        end DO
-        
+        end DO        
         !$omp end do
         !$omp end parallel
      end DO
@@ -691,7 +689,6 @@ SUBROUTINE t3_eqn
         
         !$omp parallel default(shared) private(bra,bra0,a,b, phase_cb,bra_cb,ch_cb, kind1,k,ch2)
         !$omp do schedule(dynamic)
-        
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
               IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
@@ -714,8 +711,7 @@ SUBROUTINE t3_eqn
               CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
-        end DO
-        
+        end DO        
         !$omp end do
         !$omp end parallel
      end DO
@@ -732,7 +728,6 @@ SUBROUTINE t3_eqn
         
         !$omp parallel default(shared) private(bra,bra0,a,b, phase_ac,bra_ac,ch_ac, kind1,k,ch2)
         !$omp do schedule(dynamic)
-        
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
               IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
@@ -755,16 +750,13 @@ SUBROUTINE t3_eqn
               CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO           
-        end DO
-        
+        end DO        
         !$omp end do
         !$omp end parallel
      end DO
      
   end DO
 
-  !stop
-  
   CALL mpi_barrier(mpi_comm_world,ierror)
   endwtime = MPI_WTIME()
   IF ( iam == 0 ) WRITE(6,'(A29,A29,f12.6,A5)') bsp29, " ...Computing T3...          ", (endwtime - startwtime), ' sec.'
