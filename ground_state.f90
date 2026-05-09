@@ -62,7 +62,7 @@ SUBROUTINE ccdt_iter
      CALL read_gs_hdf5
      CALL mpi_barrier(mpi_comm_world,ierror)
 
-     CALL cc_energy(e2, .true.)
+     CALL cc_energy(e2)
      IF ( iam == 0 ) write(6,*)
      
   ELSE
@@ -83,7 +83,7 @@ SUBROUTINE ccdt_iter
         write(6,*)
      END IF
      
-     CALL cc_energy(e1, .true.)
+     CALL cc_energy(e1)
      
      count = 0
      nstep = 0
@@ -109,15 +109,13 @@ SUBROUTINE ccdt_iter
         ! CALL linear_t2
         CALL diis_t2(count)
         CALL t2_cross_recouple
-        CALL cc_energy(e2, .false.)
+        CALL cc_energy(e2)
         eccdt = e2
         sigma = abs(e1 - e2)
         e1 = e2
 
         IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
              ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
-        IF ( iam == 0 ) write(6,*)
-        
         iterations = iterations + 1
         IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
              iterations > min(max_iterations-1,10) )  then
@@ -185,7 +183,7 @@ SUBROUTINE ccdt_iter
            ! CALL linear_t2
            CALL diis_t2(count)
            CALL t2_cross_recouple
-           CALL cc_energy(e2, .false.)
+           CALL cc_energy(e2)
            eccdt = e2
            sigma = abs(e1 - e2)
            e1 = e2
@@ -193,8 +191,6 @@ SUBROUTINE ccdt_iter
 
            IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
                 ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
-           IF ( iam == 0 ) write(6,*)
-
            iterations = iterations + 1
            IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
                 iterations > min(max_iterations-1,10) )  then
@@ -202,16 +198,14 @@ SUBROUTINE ccdt_iter
            ELSE
               selfconsistency = .FALSE.
            end IF
-           
         end DO
         IF ( cc_approx > 1 .and. tnf_approx > 1 ) then
-           CALL cc_energy_3b(e3, .true.)
+           CALL cc_energy_3b(e3)
            eccdt = e3
         end IF
      end IF
      
      ! Write to file
-     IF ( iam == 0 ) write(6,*)
      IF ( iam == 0 ) write(6,'(A34,31x,A)') 'Writing CC amplitudes to file...', trim(cc_file)
      IF ( iam == 0 ) write(6,*)
      CALL print_gs_hdf5
@@ -228,7 +222,7 @@ SUBROUTINE ccdt_iter
   IF ( cc_approx == 1 ) then
      t3_switch = .TRUE.
      CALL setup_t3_amplitudes(.false.)
-     CALL cc_energy_lambda(e3, .true.)
+     CALL cc_energy_lambda(e3)
      eccdt = e3
      IF ( iam == 0 ) write(6,*)
   end IF
@@ -673,9 +667,11 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- -<cd|t|ij>.<ab|v|kd>
-              CALL t3_diag1(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab)
+              CALL t3_diag1(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- +<ab|t|lk>.<lc|v|ij>
-              CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab)
+              CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
         end DO
         
@@ -712,9 +708,11 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- +<ad|t|ij>.<cb|v|kd>
-              CALL t3_diag1(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb)
+              CALL t3_diag1(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- -<cb|t|lk>.<la|v|ij>
-              CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb)
+              CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
         end DO
         
@@ -751,9 +749,11 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- +<bd|t|ij>.<ac|v|kd>
-              CALL t3_diag1(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac)
+              CALL t3_diag1(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- -<ac|t|lk>.<lb|v|ij>
-              CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac)
+              CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac, &
+                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO           
         end DO
         

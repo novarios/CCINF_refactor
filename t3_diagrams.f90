@@ -7,7 +7,12 @@ CONTAINS
   ! T3 diagram 1: <abc|t|ijk> <-- -<cd|t|ij>.<ab|v|kd>
   ! Loops over particle index d, contracts T2 with V2(pphp).
   !
-  SUBROUTINE t3_diag1(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1)
+  ! cval is passed explicitly (not accessed via t3_ccm module variable)
+  ! so that each OpenMP thread gets its own pointer descriptor on the
+  ! stack, avoiding concurrent reads of the shared pointer-remapped
+  ! descriptor.
+  !
+  SUBROUTINE t3_diag1(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1, cval)
     USE single_particle_orbits
     USE configurations
     USE constants
@@ -15,6 +20,7 @@ CONTAINS
     
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1
+    COMPLEX(dpc), INTENT(INOUT) :: cval(:,:)
     INTEGER :: bra0,ket0, d, ket,ket1,ket_confs
     
     ket_confs = number_2b_t3(ch3)%ival2(2,ch2)  
@@ -28,7 +34,7 @@ CONTAINS
        bra0 = pp_config_2b%ival2(d,c1)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) &
+          cval(bra,ket) = cval(bra,ket) &
                + phase1 * t2_ccm(ch2)%cval(bra0,ket1) * v2b_pphp(ch1)%cval(bra1,ket0)
        end DO
     end DO
@@ -40,7 +46,7 @@ CONTAINS
        bra0 = pp_config_2b%ival2(c1,d)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) &
+          cval(bra,ket) = cval(bra,ket) &
                - phase1 * t2_ccm(ch2)%cval(bra0,ket1) * v2b_pphp(ch1)%cval(bra1,ket0)
        end DO
     end DO
@@ -51,7 +57,7 @@ CONTAINS
   ! T3 diagram 2: <abc|t|ijk> <-- +<ab|t|lk>.<lc|v|ij>
   ! Loops over hole index l, contracts T2 with V2(hphh).
   !
-  SUBROUTINE t3_diag2(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1)
+  SUBROUTINE t3_diag2(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1, cval)
     USE single_particle_orbits
     USE configurations
     USE constants
@@ -59,6 +65,7 @@ CONTAINS
     
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1
+    COMPLEX(dpc), INTENT(INOUT) :: cval(:,:)
     INTEGER :: bra0,ket0, l, ket,ket1,ket_confs
     
     ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
@@ -72,7 +79,7 @@ CONTAINS
        ket0 = hh_config_2b%ival2(l,k)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) &
+          cval(bra,ket) = cval(bra,ket) &
                + phase1 * t2_ccm(ch1)%cval(bra1,ket0) * v2b_hphh(ch2)%cval(bra0,ket1)
        end DO
     end DO
@@ -84,7 +91,7 @@ CONTAINS
        ket0 = hh_config_2b%ival2(k,l)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) &
+          cval(bra,ket) = cval(bra,ket) &
                - phase1 * t2_ccm(ch1)%cval(bra1,ket0) * v2b_hphh(ch2)%cval(bra0,ket1)
        end DO
     end DO
