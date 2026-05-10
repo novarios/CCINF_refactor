@@ -96,13 +96,13 @@ SUBROUTINE ccdt_iter
         startwtime = MPI_WTIME()
         CALL build_hbar_t2_iter
         endwtime = MPI_WTIME()
-        IF ( iam == 0 ) write(6,'(A29,F12.2,A5)') ' ...Computing Hbar...        ', endwtime - startwtime, ' sec.'
+        IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...Hbar Build...        ', endwtime - startwtime, ' sec.'
 
         startwtime = MPI_WTIME()
         CALL t2_eqn
         CALL t2_denom
         endwtime = MPI_WTIME()
-        IF ( iam == 0 ) write(6,'(A29,F12.2,A5)') ' ...Computing T2...          ', endwtime - startwtime, ' sec.'
+        IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T2 Build...          ', endwtime - startwtime, ' sec.'
         
         count = count + 1
         nstep = nstep + 1
@@ -166,19 +166,19 @@ SUBROUTINE ccdt_iter
            CALL t3_eqn
            CALL t3_denom
            endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A29,F12.2,A5)') ' ...Computing T3...          ', endwtime - startwtime, ' sec.'
+           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T3 Build...          ', endwtime - startwtime, ' sec.'
                       
            startwtime = MPI_WTIME()
            CALL build_hbar_t2_iter
            endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A29,F12.2,A5)') ' ...Computing Hbar...        ', endwtime - startwtime, ' sec.'
+           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...Hbar Build...        ', endwtime - startwtime, ' sec.'
            
            startwtime = MPI_WTIME()
            CALL t2_eqn
            CALL t2_t3_eqn
            CALL t2_denom
            endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A29,F12.2,A5)') ' ...Computing T2...          ', endwtime - startwtime, ' sec.'
+           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T2 Build...          ', endwtime - startwtime, ' sec.'
            
            count = count + 1
            nstep = nstep + 1
@@ -204,13 +204,14 @@ SUBROUTINE ccdt_iter
            end IF
         end DO
         IF ( cc_approx > 1 .and. tnf_approx > 1 ) then
-           CALL cc_energy_3b(e3)
+           CALL cc_energy_3b(e3, .true.)
            eccdt = e3
         end IF
         
      end IF
      
      ! Write to file
+     IF ( iam == 0 ) write(6,*)
      IF ( iam == 0 ) write(6,'(A34,31x,A)') 'Writing CC amplitudes to file...', trim(cc_file)
      IF ( iam == 0 ) write(6,*)
      CALL print_gs_hdf5
