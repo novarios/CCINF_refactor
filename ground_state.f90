@@ -62,7 +62,7 @@ SUBROUTINE ccdt_iter
      CALL read_gs_hdf5
      CALL mpi_barrier(mpi_comm_world,ierror)
 
-     CALL cc_energy(e2)
+     CALL cc_energy(e2, .true.)
      IF ( iam == 0 ) write(6,*)
      
   ELSE
@@ -83,7 +83,7 @@ SUBROUTINE ccdt_iter
         write(6,*)
      END IF
      
-     CALL cc_energy(e1)
+     CALL cc_energy(e1, .true.)
      
      count = 0
      nstep = 0
@@ -109,13 +109,15 @@ SUBROUTINE ccdt_iter
         ! CALL linear_t2
         CALL diis_t2(count)
         CALL t2_cross_recouple
-        CALL cc_energy(e2)
+        CALL cc_energy(e2, .false.)
         eccdt = e2
         sigma = abs(e1 - e2)
         e1 = e2
 
         IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
              ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
+        IF ( iam == 0 ) write(6,*)
+        
         iterations = iterations + 1
         IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
              iterations > min(max_iterations-1,10) )  then
@@ -183,7 +185,7 @@ SUBROUTINE ccdt_iter
            ! CALL linear_t2
            CALL diis_t2(count)
            CALL t2_cross_recouple
-           CALL cc_energy(e2)
+           CALL cc_energy(e2, .false.)
            eccdt = e2
            sigma = abs(e1 - e2)
            e1 = e2
@@ -191,6 +193,8 @@ SUBROUTINE ccdt_iter
 
            IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
                 ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
+           IF ( iam == 0 ) write(6,*)
+           
            iterations = iterations + 1
            IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
                 iterations > min(max_iterations-1,10) )  then
@@ -203,6 +207,7 @@ SUBROUTINE ccdt_iter
            CALL cc_energy_3b(e3)
            eccdt = e3
         end IF
+        
      end IF
      
      ! Write to file
@@ -210,6 +215,7 @@ SUBROUTINE ccdt_iter
      IF ( iam == 0 ) write(6,*)
      CALL print_gs_hdf5
   end IF
+  
   IF ( .not. pre_gs0 ) then
      CALL deallocate_hbar_t2_iter
      hbar_built = .FALSE.
@@ -219,6 +225,7 @@ SUBROUTINE ccdt_iter
         t3_switch = .FALSE.
      end IF
   end IF
+  
   IF ( cc_approx == 1 ) then
      t3_switch = .TRUE.
      CALL setup_t3_amplitudes(.false.)
