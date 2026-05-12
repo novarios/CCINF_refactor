@@ -102,12 +102,12 @@ SUBROUTINE setup_t3_amplitudes(fill)
   
   IMPLICIT NONE
   LOGICAL, INTENT(IN) :: fill
-  INTEGER :: number_channels, ch3, ch1,ch2
+  INTEGER :: number_channels, ch3, ch1,ch2, ch
   INTEGER :: bra_min,bra_max, k1,k2,k3,k4
-  INTEGER :: a,b,c,i,j,k, p,q,r, cind1, kind1
+  INTEGER :: a,b,c,d,i,j,k,l, p,q,r, cind1, kind1
   INTEGER :: bra,ket, bra0,ket0, nrow
   INTEGER :: bra_confs,ket_confs
-  INTEGER :: c_count, k_count
+  INTEGER :: c_count, k_count, d_count, l_count
   INTEGER :: nx3,ny3,nz3,tz3
   INTEGER :: num_ch0, chmin, chmax, ch_pr_proc
   INTEGER(i8) :: ndim3, total, offset, nelem
@@ -375,6 +375,47 @@ SUBROUTINE setup_t3_amplitudes(fill)
      
   end DO
 
+  ! Setup T3 inverse table for loops
+  ALLOCATE( t3_hh_inv(channels_2b%number_confs, below_ef) )
+  DO ch = 1, channels_2b%number_confs
+     DO k = 1, below_ef
+        l_count = 0
+        DO l = 1, below_ef
+           IF ( ch /= hh_channel_2b%ival2(l,k) ) cycle
+           l_count = l_count + 1
+        end DO
+        t3_hh_inv(ch,k)%n = l_count
+        IF ( l_count == 0 ) cycle
+        ALLOCATE( t3_hh_inv(ch,k)%idx(l_count) )
+        l_count = 0
+        DO l = 1, below_ef
+           IF ( ch /= hh_channel_2b%ival2(l,k) ) cycle
+           l_count = l_count + 1
+           t3_hh_inv(ch,k)%idx(l_count) = l
+        end DO
+     end DO
+  end DO
+  
+  ALLOCATE( t3_hp_inv(channels_2b%number_confs, below_ef) )
+  DO ch = 1, channels_2b%number_confs
+     DO k = 1, below_ef
+        d_count = 0
+        DO d = below_ef+1, tot_orbs
+           IF ( ch /= hp_channel_2b%ival2(k,d) ) cycle
+           d_count = d_count + 1
+        end DO
+        t3_hp_inv(ch,k)%n = d_count
+        IF ( d_count == 0 ) cycle
+        ALLOCATE( t3_hp_inv(ch,k)%idx(d_count) )
+        d_count = 0
+        DO d = below_ef+1, tot_orbs
+           IF ( ch /= hp_channel_2b%ival2(k,d) ) cycle
+           d_count = d_count + 1
+           t3_hp_inv(ch,k)%idx(d_count) = d
+        end DO
+     end DO
+  end DO
+  
   
   ! Setup T3 mapping
   CALL setup_proc_mappings1_t3
@@ -602,8 +643,8 @@ SUBROUTINE deallocate_t3_amplitudes
   USE mpi_check
   
   IMPLICIT NONE
-  INTEGER :: ch3, cind1,kind1
-    
+  INTEGER :: ch3, cind1,kind1, ch,k
+  
   DO ch3 = ch3_min, ch3_max
      DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
         IF ( ASSOCIATED(t3_ccm(ch3)%pack1(cind1)%buf) ) then
@@ -648,6 +689,18 @@ SUBROUTINE deallocate_t3_amplitudes
   DEALLOCATE( climit_t3, klimit_t3 )
   DEALLOCATE( climits_t3 )
   DEALLOCATE( channels_t3%config_NxNyNz_Tz )
+
+  DO ch = 1, channels_2b%number_confs
+     DO k = 1, below_ef
+        IF ( t3_hh_inv(ch,k)%n > 0 ) then
+           DEALLOCATE( t3_hh_inv(ch,k)%idx )
+        end IF
+        IF ( t3_hp_inv(ch,k)%n > 0 ) then
+           DEALLOCATE( t3_hp_inv(ch,k)%idx )
+        end IF
+     end DO
+  end DO
+  DEALLOCATE( t3_hh_inv, t3_hp_inv )
 
   t3_built = .FALSE.
   

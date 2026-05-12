@@ -11,8 +11,8 @@ SUBROUTINE ccdt_iter
   USE contracts
   USE mpi_check
   USE mem_tracker
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: iterations, max_iterations, count
   REAL(dp) :: sigma, tolerance
@@ -265,8 +265,8 @@ SUBROUTINE t2_eqn
   USE parallel
   USE configurations
   USE contracts
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch, bra_confs,ket_confs, bra_min,bra_max
   INTEGER :: a,b,i,j,c,k, bra,ket,bra2,ket2
@@ -409,8 +409,8 @@ SUBROUTINE t2_t3_eqn
   USE ang_mom_functions
   USE parallel
   USE contracts
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch3, ch1,ch2, ket_confs
   INTEGER :: bra0,ket0, bra,ket, bra_min,bra_max
@@ -547,8 +547,8 @@ SUBROUTINE t2_denom
   USE operator_storage
   USE ang_mom_functions
   USE contracts
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch, bra, ket, bra_confs, ket_confs
   INTEGER :: a,b,i,j
@@ -612,8 +612,8 @@ SUBROUTINE t3_eqn
   USE t3_diagrams
   USE omp_lib
   USE contracts
-
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch1,ch2,ch3
   INTEGER :: bra, bra0, bra_min,bra_max, bra_confs,ket_confs
@@ -782,8 +782,8 @@ SUBROUTINE antisymmetrize_t3
   USE ang_mom_functions
   USE parallel
   USE contracts
-
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch3, ch2, ch_i,ch_j
   INTEGER :: ket,ket0,ket1, ket_confs, bra_min,bra_max
@@ -792,7 +792,8 @@ SUBROUTINE antisymmetrize_t3
   INTEGER, allocatable :: klist_inv(:)
   TYPE (superblock_storage) :: hh_t3_temp
   TYPE (superblock_storage) :: t3_temp
-
+  COMPLEX(dpc), POINTER :: wk(:,:)
+  
   CALL assert_built('t3', 'antisymmetrize_t3')
 
   IF ( iam == 0 ) WRITE(6,'(A29)',advance='no') " ...Antisymmetrizing T3...   "
@@ -853,6 +854,9 @@ SUBROUTINE antisymmetrize_t3
            IF ( ket_confs <= 0 ) cycle
            
            ! k <-> i
+           !$omp parallel default(shared) private(wk, ket, ket0, ket1, i, j, iind, jind, ch_i, ch_j, phase)
+           wk => t3_ccm(ch3)%val2(cind1,kind1)%cval
+           !$omp do schedule(dynamic)           
            DO ket  = 1, ket_confs
               ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
               i    = lookup_2b_configs(1,ch2)%ival2(1,ket0)
@@ -868,11 +872,14 @@ SUBROUTINE antisymmetrize_t3
               ket1 = hh_t3_temp%ival1(ch_i)%ival1(ket1)
               IF ( ket1 == 0 ) cycle
               IF ( j < k ) phase = -phase
-              
-              t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,ket) &
+
+              wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
                    - phase * t3_temp%val1(iind)%cval(bra_min:bra_max,ket1)
            end DO
+           !$omp end do
+           
            ! k <-> j
+           !$omp do schedule(dynamic)
            DO ket  = 1, ket_confs
               ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
               i    = lookup_2b_configs(1,ch2)%ival2(1,ket0)
@@ -889,9 +896,11 @@ SUBROUTINE antisymmetrize_t3
               IF ( ket1 == 0 ) cycle
               IF ( k < i ) phase = -phase
 
-              t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,ket) &
+              wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
                    - phase * t3_temp%val1(jind)%cval(bra_min:bra_max,ket1)
            end DO
+           !$omp end do
+           !$omp end parallel
         end DO
         
         DO kind1 = 1, klimit_t3(ch3)
@@ -938,13 +947,14 @@ SUBROUTINE t3_denom
   USE operator_storage
   USE ang_mom_functions
   USE contracts
-  
   USE mpi_check
+  
   IMPLICIT NONE
   INTEGER :: ch3, ch1,ch2, bra,ket, bra0,ket0
   INTEGER :: ket_confs, bra_min,bra_max
   INTEGER :: a,b,c, i,j,k, cind1,kind1
   COMPLEX(dpc) :: denom
+  COMPLEX(dpc), POINTER :: wk(:,:)
 
   CALL assert_built('t3',   't3_denom')
   CALL assert_built('hbar', 't3_denom')
@@ -973,7 +983,11 @@ SUBROUTINE t3_denom
                       + t3_ccm0(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:)
               end IF
            end IF
-           
+
+           !$omp parallel default(shared) private(wk, bra, bra0, a, b, ket, ket0, i, j, denom)
+           ! Each thread gets its own pointer descriptor via PRIVATE
+           wk => t3_ccm(ch3)%val2(cind1,kind1)%cval
+           !$omp do schedule(static)           
            DO bra  = bra_min, bra_max
               bra0 = pp_config_t3(ch3)%ival1(ch1)%ival1(bra)
               a    = lookup_2b_configs(3,ch1)%ival2(1,bra0)
@@ -992,9 +1006,11 @@ SUBROUTINE t3_denom
                     denom = ( fock_mtx(i,i) + fock_mtx(j,j) + fock_mtx(k,k) &
                          - fock_mtx(a,a) - fock_mtx(b,b) - fock_mtx(c,c) ) - 3.d0*cc_level
                  end IF
-                 t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,ket)/denom
+                 wk(bra,ket) = wk(bra,ket)/denom
               end DO
            end DO
+           !$omp end do
+           !$omp end parallel
         end DO
      end DO
   end DO
@@ -1003,4 +1019,3 @@ SUBROUTINE t3_denom
   IF ( test == 3 ) CALL build_t3_eqn_test
   
 end SUBROUTINE t3_denom
-

@@ -222,6 +222,11 @@ MODULE operator_storage
      TYPE(block_storage), DIMENSION(:,:), ALLOCATABLE :: val2
      TYPE(integer_storage), DIMENSION(:), ALLOCATABLE :: ival1
   END TYPE superblock_storage
+
+  TYPE, PUBLIC :: index_list
+     INTEGER :: n = 0
+     INTEGER, ALLOCATABLE :: idx(:)
+  END TYPE index_list
   
   REAL(dp), DIMENSION(:,:), ALLOCATABLE :: u_hf, tkin_mtx
   COMPLEX(dpc), DIMENSION(:,:), ALLOCATABLE :: fock_mtx
@@ -236,6 +241,7 @@ MODULE operator_storage
   TYPE (integer_storage), ALLOCATABLE, PUBLIC :: mapping_t3(:)
   INTEGER, ALLOCATABLE, PUBLIC :: mapping_t3_red(:,:)
   INTEGER, ALLOCATABLE, PUBLIC :: num0_t3(:,:,:,:,:)
+  TYPE (index_list), ALLOCATABLE, PUBLIC :: t3_hh_inv(:,:), t3_hp_inv(:,:)
 
   TYPE (integer_storage), ALLOCATABLE, PUBLIC :: lookup_2b_configs(:,:)
   TYPE (integer_storage), ALLOCATABLE, PUBLIC :: lookup_2bcross_configs(:,:)
@@ -248,8 +254,6 @@ MODULE operator_storage
 
   TYPE (t3_superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm0(:)
   TYPE (t3_superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm(:)
-  ! TYPE (superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm0(:)
-  ! TYPE (superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm(:)
   
   TYPE (integer_storage), ALLOCATABLE, PUBLIC :: number_2b_t3(:)
   TYPE (superblock_storage), ALLOCATABLE, PUBLIC :: hh_config_t3(:)

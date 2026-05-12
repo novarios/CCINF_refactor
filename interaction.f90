@@ -959,7 +959,7 @@ SUBROUTINE v2b_hphh_3b(fock_mtx0)
            k   = lookup_2b_configs(1,ch)%ival2(2,ket)
            vtmp = 0.d0
            DO h = 1, below_ef
-              IF ( h == i .or. h == j .or. j == k ) cycle
+              IF ( h == i .or. h == j .or. h == k ) cycle
               v3b = v3int(i,a,h,j,k,h)
               vtmp = vtmp + v3b
            end DO
