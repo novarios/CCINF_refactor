@@ -674,10 +674,10 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- -<cd|t|ij>.<ab|v|kd>
-              CALL t3_diag1(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab, &
+              CALL t3_diag1(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab,bra_min, phase_ab, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- +<ab|t|lk>.<lc|v|ij>
-              CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab, phase_ab, &
+              CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab,bra_min, phase_ab, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
         end DO        
@@ -713,10 +713,10 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- +<ad|t|ij>.<cb|v|kd>
-              CALL t3_diag1(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb, &
+              CALL t3_diag1(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb,bra_min, phase_cb, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- -<cb|t|lk>.<la|v|ij>
-              CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb, phase_cb, &
+              CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb,bra_min, phase_cb, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO
         end DO        
@@ -752,10 +752,10 @@ SUBROUTINE t3_eqn
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
               ! <abc|t|ijk> <-- +<bd|t|ij>.<ac|v|kd>
-              CALL t3_diag1(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac, &
+              CALL t3_diag1(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac,bra_min, phase_ac, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
               ! <abc|t|ijk> <-- -<ac|t|lk>.<lb|v|ij>
-              CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac, phase_ac, &
+              CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac,bra_min, phase_ac, &
                     t3_ccm(ch3)%val2(cind1,kind1)%cval)
            end DO           
         end DO        

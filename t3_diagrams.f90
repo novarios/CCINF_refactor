@@ -8,19 +8,19 @@ CONTAINS
   ! Loops over particle index d, contracts T2 with V2(pphp).
   !
   ! cval is passed explicitly (not accessed via t3_ccm module variable)
-  ! so that each OpenMP thread gets its own pointer descriptor on the
-  ! stack, avoiding concurrent reads of the shared pointer-remapped
-  ! descriptor.
+  ! so that each OpenMP thread gets its own array descriptor on the
+  ! stack. bra_lo preserves the original lower bound of the pointer-
+  ! remapped array, since assumed-shape arguments rebase to 1.
   !
-  SUBROUTINE t3_diag1(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1, cval)
+  SUBROUTINE t3_diag1(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1,bra_min, phase1, cval)
     USE single_particle_orbits
     USE configurations
     USE constants
     USE operator_storage
     
     IMPLICIT NONE
-    INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1
-    COMPLEX(dpc), INTENT(INOUT) :: cval(:,:)
+    INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1,bra_min, phase1
+    COMPLEX(dpc), INTENT(INOUT) :: cval(bra_min:,:)
     INTEGER :: bra0,ket0, id,d, ket,ket1,ket_confs, phase
     COMPLEX(dpc) :: factor
     
@@ -39,30 +39,6 @@ CONTAINS
           cval(bra,ket) = cval(bra,ket) + factor * t2_ccm(ch2)%cval(bra0,ket1)
        end DO
     end DO
-    ! ! d < c1
-    ! DO d = below_ef+1, c1-1
-    !    IF ( ch1 /= hp_channel_2b%ival2(k,d) ) cycle
-    !    ket0 = hp_config_2b%ival2(k,d)
-    !    IF ( ch2 /= pp_channel_2b%ival2(d,c1) ) cycle
-    !    bra0 = pp_config_2b%ival2(d,c1)
-    !    factor = phase1 * v2b_pphp(ch1)%cval(bra1,ket0)
-    !    DO ket = 1, ket_confs
-    !       ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-    !       cval(bra,ket) = cval(bra,ket) + factor * t2_ccm(ch2)%cval(bra0,ket1)
-    !    end DO
-    ! end DO
-    ! ! d > c1
-    ! DO d = c1+1, tot_orbs
-    !    IF ( ch1 /= hp_channel_2b%ival2(k,d) ) cycle
-    !    ket0 = hp_config_2b%ival2(k,d)
-    !    IF ( ch2 /= pp_channel_2b%ival2(c1,d) ) cycle
-    !    bra0 = pp_config_2b%ival2(c1,d)
-    !    factor = phase1 * v2b_pphp(ch1)%cval(bra1,ket0)
-    !    DO ket = 1, ket_confs
-    !       ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-    !       cval(bra,ket) = cval(bra,ket) - factor * t2_ccm(ch2)%cval(bra0,ket1)
-    !    end DO
-    ! end DO
     
   end SUBROUTINE t3_diag1
   
@@ -70,15 +46,15 @@ CONTAINS
   ! T3 diagram 2: <abc|t|ijk> <-- +<ab|t|lk>.<lc|v|ij>
   ! Loops over hole index l, contracts T2 with V2(hphh).
   !
-  SUBROUTINE t3_diag2(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1, cval)
+  SUBROUTINE t3_diag2(ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1,bra_min, phase1, cval)
     USE single_particle_orbits
     USE configurations
     USE constants
     USE operator_storage
     
     IMPLICIT NONE
-    INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1, phase1
-    COMPLEX(dpc), INTENT(INOUT) :: cval(:,:)
+    INTEGER, INTENT(IN) :: ch3, ch1,ch2, cind1,kind1, c1,k, bra,bra1,bra_min, phase1
+    COMPLEX(dpc), INTENT(INOUT) :: cval(bra_min:,:)
     INTEGER :: bra0,ket0, il,l, ket,ket1,ket_confs
     COMPLEX(dpc) :: factor
     
@@ -97,30 +73,6 @@ CONTAINS
           cval(bra,ket) = cval(bra,ket) + factor * v2b_hphh(ch2)%cval(bra0,ket1)
        end DO
     end DO
-    ! ! l < k
-    ! DO l = 1, k-1
-    !    IF ( ch2 /= hp_channel_2b%ival2(l,c1) ) cycle
-    !    bra0 = hp_config_2b%ival2(l,c1)
-    !    IF ( ch1 /= hh_channel_2b%ival2(l,k) ) cycle
-    !    ket0 = hh_config_2b%ival2(l,k)
-    !    factor = phase1 * t2_ccm(ch1)%cval(bra1,ket0)
-    !    DO ket = 1, ket_confs
-    !       ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-    !       cval(bra,ket) = cval(bra,ket) + factor * v2b_hphh(ch2)%cval(bra0,ket1)
-    !    end DO
-    ! end DO
-    ! ! l > k
-    ! DO l = k+1, below_ef
-    !    IF ( ch2 /= hp_channel_2b%ival2(l,c1) ) cycle
-    !    bra0 = hp_config_2b%ival2(l,c1)
-    !    IF ( ch1 /= hh_channel_2b%ival2(k,l) ) cycle
-    !    ket0 = hh_config_2b%ival2(k,l)
-    !    factor = phase1 * t2_ccm(ch1)%cval(bra1,ket0)
-    !    DO ket = 1, ket_confs
-    !       ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-    !       cval(bra,ket) = cval(bra,ket) - factor * v2b_hphh(ch2)%cval(bra0,ket1)
-    !    end DO
-    ! end DO
     
   end SUBROUTINE t3_diag2  
   
