@@ -41,7 +41,7 @@ FCD = ${COMP} -O0 -g -fcheck=all -fbacktrace -ffpe-trap=invalid,zero,overflow -W
 FC  = ${COMP} -O2
 
 # Default: debug. Use MODE=release for production.
-ifeq ($(MODE),release)
+ifdef RELEASE
   XLF = ${FC} ${HDF5_INCLUDE}
 else
   XLF = ${FCD} ${HDF5_INCLUDE}
