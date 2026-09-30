@@ -639,7 +639,13 @@ SUBROUTINE t3_eqn
 
   startwtime = MPI_WTIME()
   CALL mpi_barrier(mpi_comm_world,ierror)
-  
+
+  ! hh-fastest copy of T2 for the diagram inner loops
+  DO ch2 = 1, channels_2b%number_confs
+     IF ( .not. allocated(t2_ccm_T(ch2)%cval) ) cycle
+     t2_ccm_T(ch2)%cval = transpose( t2_ccm(ch2)%cval )
+  END DO
+
   ! <abc|t|ijk> <-- -P(c/ab|k/ij).<cd|t|ij>.<ab|v|kd>
   DO ch3 = ch3_min, ch3_max
      IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE

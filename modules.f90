@@ -257,6 +257,10 @@ MODULE operator_storage
   TYPE (block_storage), ALLOCATABLE, PUBLIC :: t2_ccm_cross(:)
   TYPE (block_storage), ALLOCATABLE, PUBLIC :: t2_ccm_eqn_cross(:)
 
+  ! transposed (hh-index fastest) copies for the T3 diagram inner loops
+  TYPE (block_storage), ALLOCATABLE, PUBLIC :: t2_ccm_T(:)     ! (hh,pp), refilled each t3_eqn
+  TYPE (block_storage), ALLOCATABLE, PUBLIC :: v2b_hphh_T(:)   ! (hh,hp)
+
   TYPE (t3_superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm0(:)
   TYPE (t3_superblock_storage), ALLOCATABLE, PUBLIC :: t3_ccm(:)
   

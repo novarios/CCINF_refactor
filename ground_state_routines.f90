@@ -626,6 +626,22 @@ SUBROUTINE setup_t3_amplitudes(fill)
      CALL mem_report('T3 3-body matrix elements')
   END IF
 
+  ! Transposed T2 and V(hphh) for the T3 diagrams
+  ALLOCATE( t2_ccm_T(channels_2b%number_confs) )
+  ALLOCATE( v2b_hphh_T(channels_2b%number_confs) )
+  DO ch = 1, channels_2b%number_confs
+     IF ( number_2b(1,ch) == 0 ) cycle
+     IF ( number_2b(3,ch) > 0 ) THEN
+        ALLOCATE( t2_ccm_T(ch)%cval(number_2b(1,ch), number_2b(3,ch)) )
+        CALL mem_register('t2', REAL(number_2b(1,ch),dp) * number_2b(3,ch) * 16.d0)
+     END IF
+     IF ( number_2b(2,ch) > 0 ) THEN
+        ALLOCATE( v2b_hphh_T(ch)%cval(number_2b(1,ch), number_2b(2,ch)) )
+        v2b_hphh_T(ch)%cval = transpose( v2b_hphh(ch)%cval )
+        CALL mem_register('v2', REAL(number_2b(1,ch),dp) * number_2b(2,ch) * 16.d0)
+     END IF
+  END DO
+
   CALL mem_report('T3 amplitudes')
   CALL mpi_barrier(mpi_comm_world,ierror)
   
@@ -709,6 +725,7 @@ SUBROUTINE deallocate_t3_amplitudes
      end DO
   end DO
   DEALLOCATE( t3_hh_inv, t3_hp_inv )
+  DEALLOCATE( t2_ccm_T, v2b_hphh_T )
 
   t3_built = .FALSE.
   

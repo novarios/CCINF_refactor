@@ -36,7 +36,7 @@ CONTAINS
        factor = phase1 * sign(1, c1 - d) * v2b_pphp(ch1)%cval(bra1,ket0)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          acc(ket) = acc(ket) + factor * t2_ccm(ch2)%cval(bra0,ket1)
+          acc(ket) = acc(ket) + factor * t2_ccm_T(ch2)%cval(ket1,bra0)
        end DO
     end DO
 
@@ -70,7 +70,7 @@ CONTAINS
        factor = phase1 * sign(1, k - l) * t2_ccm(ch1)%cval(bra1,ket0)
        DO ket = 1, ket_confs
           ket1 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-          acc(ket) = acc(ket) + factor * v2b_hphh(ch2)%cval(bra0,ket1)
+          acc(ket) = acc(ket) + factor * v2b_hphh_T(ch2)%cval(ket1,bra0)
        end DO
     end DO
 
