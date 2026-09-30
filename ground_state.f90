@@ -340,8 +340,8 @@ SUBROUTINE t2_eqn
      dim1 = bra_max - bra_min + 1
      dim2 = ket_confs
      dim3 = ket_confs
-     CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(1.d0,0.d0), t2_ccm(ch)%cval(bra_min:bra_max,:), dim1, &
-          hbar2b_I4(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn(ch)%cval(bra_min:bra_max,:), dim1 )     
+     CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(1.d0,0.d0), t2_ccm(ch)%cval(bra_min,1), bra_confs, &
+          hbar2b_I4(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn(ch)%cval(bra_min,1), bra_confs )
   end DO
   CALL mpi_barrier(mpi_comm_world,ierror)
 
@@ -360,7 +360,7 @@ SUBROUTINE t2_eqn
      dim2 = ket_confs
      dim3 = bra_confs
      CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(1.d0,0.d0), v2b_pppp(ch)%cval(bra_min:bra_max,:), dim1, &
-          t2_ccm(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn(ch)%cval(bra_min:bra_max,:), dim1 )
+          t2_ccm(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn(ch)%cval(bra_min,1), bra_confs )
   end DO
   CALL mpi_barrier(mpi_comm_world,ierror)
   
@@ -382,8 +382,8 @@ SUBROUTINE t2_eqn
      dim1 = bra_max - bra_min + 1
      dim2 = ket_confs
      dim3 = ket_confs
-     CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(-1.d0,0.d0), t2_ccm_cross(ch)%cval(bra_min:bra_max,:), dim1, &
-          hbar2b_I5e_cross(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn_cross(ch)%cval(bra_min:bra_max,:), dim1 )
+     CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(-1.d0,0.d0), t2_ccm_cross(ch)%cval(bra_min,1), bra_confs, &
+          hbar2b_I5e_cross(ch)%cval, dim3, dcmplx(1.d0,0.d0), t2_ccm_eqn_cross(ch)%cval(bra_min,1), bra_confs )
   end DO
   CALL mpi_barrier(mpi_comm_world,ierror)
   ! Allreduce t2_ccm_eqn in "t2_denom"

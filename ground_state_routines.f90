@@ -111,6 +111,8 @@ SUBROUTINE setup_t3_amplitudes(fill)
   INTEGER :: nx3,ny3,nz3,tz3
   INTEGER :: num_ch0, chmin, chmax, ch_pr_proc
   INTEGER(i8) :: ndim3, total, offset, nelem
+  INTEGER(i8) :: slab, max_slab, nstore
+  REAL(dp) :: peak
   COMPLEX(dpc) :: v3b
   INTEGER :: istat
 
@@ -427,6 +429,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
   ! killer fires later when the memory is touched. This check
   ! catches that scenario with a clear error message.
   total = 0
+  max_slab = 0
   DO ch3 = ch3_min, ch3_max
      IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
      DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
@@ -437,25 +440,30 @@ SUBROUTINE setup_t3_amplitudes(fill)
         bra_max = mapping_t3(ch3)%ival2(cind1,2)
         IF ( bra_min <= 0 .or. bra_min > bra_max ) cycle
         nrow = bra_max - bra_min + 1
+        slab = 0
         DO kind1 = 1, klimit_t3(ch3)
            k   = klist_t3(ch3)%ival2(kind1,1)
            ch2 = klist_t3(ch3)%ival2(kind1,2)
            IF ( k <= 0 .or. ch2 <= 0 ) cycle
            ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
            IF ( ket_confs <= 0 ) cycle
-           total = total + int(nrow,8) * int(ket_confs,8)
+           slab = slab + int(nrow,8) * int(ket_confs,8)
         END DO
+        total    = total + slab
+        max_slab = max(max_slab, slab)
      END DO
   END DO
+  ! t3_ccm0 has the same layout as t3_ccm
+  nstore = 1
+  IF ( tnf_approx > 1 ) nstore = 2
+  ! per-rank peak: stored T3 (+ t3_ccm0) + antisymmetrize_t3's copy of its largest cind1 slab
+  peak = REAL(nstore*total + max_slab, dp) * t3_bytes
+  CALL mpi_allreduce(mpi_in_place, peak, 1, MPI_REAL8, MPI_MAX, MPI_COMM_WORLD, ierror)
   IF ( iam == 0 ) THEN
      write(6,'(A,F12.2,A)') '  T3 total memory estimate:  ', &
-          REAL(ndim3,dp) * t3_bytes / 1.0e9_dp, ' GB (all ranks)'
-  END IF
-  nelem = total  ! save local for allreduce
-  CALL mpi_allreduce(total, nelem, 1, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, ierror)
-  IF ( iam == 0 ) THEN
-     write(6,'(A,F12.2,A)') '  T3 max rank needs:         ', &
-          REAL(nelem,dp) * t3_bytes / 1.0e9_dp, ' GB'
+          REAL(nstore*ndim3,dp) * t3_bytes / 1.0e9_dp, ' GB (all ranks)'
+     write(6,'(A,F12.2,A)') '  T3 max rank peak:          ', &
+          peak / 1.0e9_dp, ' GB (incl. t3_ccm0 + antisym temp)'
      write(6,'(A,F12.2,A)') '  Already allocated:         ', &
           mem_total_local() / 1.0e9_dp, ' GB'
      write(6,*)
