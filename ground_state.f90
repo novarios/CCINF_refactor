@@ -874,73 +874,88 @@ SUBROUTINE antisymmetrize_t3
         IF ( bra_max < bra_min ) CYCLE
         ALLOCATE( t3_temp(1:klimit_t3(ch3)) )
 
-        ! Allocate and Fill t3_temp for all k_channels
+        ! One region per slab. Updates to block kind1 write only its own columns and
+        ! read only t3_temp, so the only barrier needed is between copy and update.
+        !$omp parallel default(shared) &
+        !$omp private(kind1, k, ch2, ket_confs, wk, ket, ket0, ket1, i, j, iind, jind, ch_i, ch_j, phase)
+
+        ! Allocate t3_temp for all k_channels
+        !$omp single
         DO kind1 = 1, klimit_t3(ch3)
            IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
            ch2       = klist_t3(ch3)%ival2(kind1,2)
            ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
            IF ( ket_confs <= 0 ) cycle
            ALLOCATE( t3_temp(kind1)%cval(bra_min:bra_max,ket_confs) )
-           t3_temp(kind1)%cval(bra_min:bra_max,:) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:)
         end DO
-        
+        !$omp end single
+
+        ! Fill t3_temp
+        DO kind1 = 1, klimit_t3(ch3)
+           IF ( .not. associated(t3_temp(kind1)%cval) ) cycle
+           ket_confs = size(t3_temp(kind1)%cval, 2)
+           !$omp do schedule(static)
+           DO ket = 1, ket_confs
+              t3_temp(kind1)%cval(bra_min:bra_max,ket) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,ket)
+           end DO
+           !$omp end do nowait
+        end DO
+        !$omp barrier
+
         DO kind1 = 1, klimit_t3(ch3)
            IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
            k         = klist_t3(ch3)%ival2(kind1,1)
            ch2       = klist_t3(ch3)%ival2(kind1,2)
            ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
            IF ( ket_confs <= 0 ) cycle
-           
-           ! k <-> i
-           !$omp parallel default(shared) private(wk, ket, ket0, ket1, i, j, iind, jind, ch_i, ch_j, phase)
            wk => t3_ccm(ch3)%val2(cind1,kind1)%cval
-           !$omp do schedule(dynamic)           
-           DO ket  = 1, ket_confs
-              ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-              i    = lookup_2b_configs(1,ch2)%ival2(1,ket0)
-              j    = lookup_2b_configs(1,ch2)%ival2(2,ket0)
-              iind = klist_inv(i)
-              IF ( iind == 0 ) cycle
-              IF ( .not. associated(t3_temp(iind)%cval) ) cycle
-              ch_i = klist_t3(ch3)%ival2(iind,2)
-              IF ( ch_i == 0 ) cycle
-              IF ( ch_i /= hh_channel_2b%ival2(k,j) ) cycle
-              phase = 1
-              ket1 = hh_config_2b%ival2(k,j)
-              ket1 = hh_t3_temp%ival1(ch_i)%ival1(ket1)
-              IF ( ket1 == 0 ) cycle
-              IF ( j < k ) phase = -phase
 
-              wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
-                   - phase * t3_temp(iind)%cval(bra_min:bra_max,ket1)
-           end DO
-           !$omp end do
-           
-           ! k <-> j
            !$omp do schedule(dynamic)
            DO ket  = 1, ket_confs
               ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
               i    = lookup_2b_configs(1,ch2)%ival2(1,ket0)
               j    = lookup_2b_configs(1,ch2)%ival2(2,ket0)
-              jind = klist_inv(j)
-              IF ( jind == 0 ) cycle
-              IF ( .not. associated(t3_temp(jind)%cval) ) cycle
-              ch_j = klist_t3(ch3)%ival2(jind,2)
-              IF ( ch_j == 0 ) cycle
-              IF ( ch_j /= hh_channel_2b%ival2(i,k) ) cycle
-              phase = 1
-              ket1 = hh_config_2b%ival2(i,k)
-              ket1 = hh_t3_temp%ival1(ch_j)%ival1(ket1)
-              IF ( ket1 == 0 ) cycle
-              IF ( k < i ) phase = -phase
 
-              wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
-                   - phase * t3_temp(jind)%cval(bra_min:bra_max,ket1)
+              ! k <-> i
+              iind = klist_inv(i)
+              IF ( iind > 0 ) then
+                 IF ( associated(t3_temp(iind)%cval) ) then
+                    ch_i = klist_t3(ch3)%ival2(iind,2)
+                    IF ( ch_i /= 0 .and. ch_i == hh_channel_2b%ival2(k,j) ) then
+                       ket1 = hh_config_2b%ival2(k,j)
+                       ket1 = hh_t3_temp%ival1(ch_i)%ival1(ket1)
+                       IF ( ket1 /= 0 ) then
+                          phase = 1
+                          IF ( j < k ) phase = -phase
+                          wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
+                               - phase * t3_temp(iind)%cval(bra_min:bra_max,ket1)
+                       end IF
+                    end IF
+                 end IF
+              end IF
+
+              ! k <-> j
+              jind = klist_inv(j)
+              IF ( jind > 0 ) then
+                 IF ( associated(t3_temp(jind)%cval) ) then
+                    ch_j = klist_t3(ch3)%ival2(jind,2)
+                    IF ( ch_j /= 0 .and. ch_j == hh_channel_2b%ival2(i,k) ) then
+                       ket1 = hh_config_2b%ival2(i,k)
+                       ket1 = hh_t3_temp%ival1(ch_j)%ival1(ket1)
+                       IF ( ket1 /= 0 ) then
+                          phase = 1
+                          IF ( k < i ) phase = -phase
+                          wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
+                               - phase * t3_temp(jind)%cval(bra_min:bra_max,ket1)
+                       end IF
+                    end IF
+                 end IF
+              end IF
            end DO
-           !$omp end do
-           !$omp end parallel
+           !$omp end do nowait
         end DO
-        
+        !$omp end parallel
+
         DO kind1 = 1, klimit_t3(ch3)
            IF ( .not. associated(t3_temp(kind1)%cval) ) cycle
            DEALLOCATE( t3_temp(kind1)%cval )
