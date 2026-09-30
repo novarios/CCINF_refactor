@@ -1,0 +1,33 @@
+# ============================================================
+# makefile_sam — local (WSL) CCDT build
+#   make -f makefile_sam              # debug
+#   make -f makefile_sam RELEASE=1    # optimized
+# Object list comes from makefile.common (shared with Andes).
+# ============================================================
+
+LOCAL_LIBS = -lopenblas -lgsl -lgslcblas
+
+HDF5_DIR = /usr/lib/x86_64-linux-gnu/hdf5/openmpi
+HDF5_INCLUDEDIR = ${HDF5_DIR}/include
+HDF5_LIBDIR = ${HDF5_DIR}/lib
+HDF5_INCLUDE = -I${HDF5_INCLUDEDIR}
+HDF5_LIBS = -L${HDF5_LIBDIR} ${HDF5_LIBDIR}/libhdf5hl_fortran.a ${HDF5_LIBDIR}/libhdf5_hl.a ${HDF5_LIBDIR}/libhdf5_fortran.a ${HDF5_LIBDIR}/libhdf5.a -ldl -lm -lz -Wl,-rpath -Wl,${HDF5_LIBDIR}
+LIBZ       = /usr/lib/x86_64-linux-gnu/libz.a
+LIBSZ      = /usr/lib/x86_64-linux-gnu/libsz.a
+LIBSA      = /usr/lib/x86_64-linux-gnu/libaec.a
+LIB        = ${LIBZ} ${LIBSZ} ${LIBSA} -lrt -lm
+
+LIBS = ${LOCAL_LIBS} ${HDF5_LIBS} ${LIB}
+
+COMP = mpif90 -fopenmp -fdiagnostics-color=always -ffree-line-length-0 -fallow-argument-mismatch -frecursive -fno-stack-arrays
+# no underflow/denormal traps: they fire on legitimate near-zero CC amplitudes
+FCD = ${COMP} -O0 -g -fcheck=all -fbacktrace -ffpe-trap=invalid,zero,overflow -Wall -finit-real=snan -finit-integer=-999
+FC  = ${COMP} -O2
+
+ifdef RELEASE
+  XLF = ${FC} ${HDF5_INCLUDE}
+else
+  XLF = ${FCD} ${HDF5_INCLUDE}
+endif
+
+include makefile.common

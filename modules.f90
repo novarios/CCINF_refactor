@@ -15,7 +15,12 @@ MODULE kind_params
   IMPLICIT NONE
   INTEGER, PARAMETER, PUBLIC :: dp  = KIND(1.0D0)
   INTEGER, PARAMETER, PUBLIC :: dpc = KIND((1.0D0,1.0D0))
+  INTEGER, PARAMETER, PUBLIC :: spc = KIND((1.0,1.0))
   INTEGER, PARAMETER, PUBLIC :: i8  = SELECTED_INT_KIND(18)
+  ! T3 storage kind (t3_ccm, t3_ccm0). Set to dpc to restore double precision.
+  ! Contractions that read T3 (T2<-T3, 3b energy) still accumulate in dpc.
+  INTEGER, PARAMETER, PUBLIC :: t3c = spc
+  INTEGER, PARAMETER, PUBLIC :: t3_bytes = storage_size(cmplx(0.0, 0.0, kind=t3c)) / 8
 END MODULE kind_params
 
 
@@ -205,11 +210,11 @@ MODULE operator_storage
   end TYPE block_storage
 
   TYPE, PUBLIC :: t3_block_view
-     COMPLEX(dpc), DIMENSION(:,:), POINTER :: cval => null()
+     COMPLEX(t3c), DIMENSION(:,:), POINTER :: cval => null()
   END TYPE t3_block_view
 
   TYPE, PUBLIC :: complex1d_storage
-     COMPLEX(dpc), DIMENSION(:), POINTER :: buf => null()
+     COMPLEX(t3c), DIMENSION(:), POINTER :: buf => null()
   END TYPE complex1d_storage
 
   TYPE, PUBLIC :: t3_superblock_storage

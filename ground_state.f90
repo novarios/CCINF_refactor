@@ -417,7 +417,7 @@ SUBROUTINE t2_t3_eqn
   INTEGER :: a,b,c, i,j,k, c1,k1, dim1,dim2,dim3
   INTEGER :: aind, kind1, cind1, iind
   REAL(dp) :: phase
-  COMPLEX(dpc), allocatable :: temp_mtx(:,:), temp_v2b(:,:)
+  COMPLEX(dpc), allocatable :: temp_mtx(:,:), temp_v2b(:,:), temp_t3(:,:)
 
   CALL assert_built('t2', 't2_t3_eqn')
   CALL assert_built('t3', 't2_t3_eqn')
@@ -458,8 +458,12 @@ SUBROUTINE t2_t3_eqn
            
            ALLOCATE( temp_mtx(dim1,dim2) )
            temp_mtx = 0.d0
+           ! T3 may be stored in single precision; ZGEMM needs a dpc copy of the block
+           ALLOCATE( temp_t3(bra_min:bra_max,dim2) )
+           temp_t3 = t3_ccm(ch3)%val2(aind,kind1)%cval(bra_min:bra_max,1:dim2)
            CALL ZGEMM ( 't', 'n', dim1, dim2, dim3, dcmplx(1.d0,0.d0), temp_v2b(bra_min:bra_max,:), dim3, &
-                t3_ccm(ch3)%val2(aind,kind1)%cval(bra_min:bra_max,:), dim3, dcmplx(1.d0,0.d0), temp_mtx, dim1 )
+                temp_t3, dim3, dcmplx(1.d0,0.d0), temp_mtx, dim1 )
+           DEALLOCATE( temp_t3 )
            
            DO bra = 1, dim1
               k1  = lookup_2b_configs(2,ch1)%ival2(1,bra)
@@ -514,8 +518,11 @@ SUBROUTINE t2_t3_eqn
 
            ALLOCATE ( temp_mtx(bra_min:bra_max,dim2) )
            temp_mtx = dcmplx(0.d0,0.d0)
-           CALL ZGEMM ( 'n', 't', dim1, dim2, dim3, dcmplx(1.d0,0.d0), t3_ccm(ch3)%val2(cind1,iind)%cval(bra_min:bra_max,:), dim1, &
+           ALLOCATE( temp_t3(bra_min:bra_max,dim3) )
+           temp_t3 = t3_ccm(ch3)%val2(cind1,iind)%cval(bra_min:bra_max,1:dim3)
+           CALL ZGEMM ( 'n', 't', dim1, dim2, dim3, dcmplx(1.d0,0.d0), temp_t3, dim1, &
                 temp_v2b, dim2, dcmplx(1.d0,0.d0), temp_mtx, dim1 )
+           DEALLOCATE( temp_t3 )
            
            DO ket = 1, dim2
               j   = lookup_2b_configs(2,ch2)%ival2(1,ket)
@@ -620,7 +627,9 @@ SUBROUTINE t3_eqn
   INTEGER :: a,b,c, k, cind1,kind1
   INTEGER :: ch_ab, ch_cb, ch_ac, bra_ab, bra_cb, bra_ac
   INTEGER :: phase_ab, phase_cb, phase_ac
+  INTEGER :: max_ket
   REAL(dp) :: startwtime, endwtime
+  COMPLEX(dpc), ALLOCATABLE :: acc(:)
   TYPE (superblock_storage) :: pp_t3_temp
 
   CALL assert_built('t2', 't3_eqn')
@@ -646,7 +655,15 @@ SUBROUTINE t3_eqn
   ! <abc|t|ijk> <-- +<bd|t|ij>.<ac|v|kd> - <ac|t|lk>.<lb|v|ij>
   DO ch3 = ch3_min, ch3_max
      IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
-     
+
+     ! row length of the dpc accumulator
+     max_ket = 1
+     DO kind1 = 1, klimit_t3(ch3)
+        ch2 = klist_t3(ch3)%ival2(kind1,2)
+        IF ( ch2 <= 0 ) cycle
+        max_ket = max(max_ket, number_2b_t3(ch3)%ival2(2,ch2))
+     END DO
+
      ! <abc|t|ijk> <-- -<cd|t|ij>.<ab|v|kd> + <ab|t|lk>.<lc|v|ij>
      DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
         IF ( .not. ASSOCIATED(t3_ccm(ch3)%pack1(cind1)%buf) ) cycle
@@ -657,7 +674,8 @@ SUBROUTINE t3_eqn
         IF ( bra_min <= 0 ) CYCLE
         IF ( bra_max < bra_min ) CYCLE
         
-        !$omp parallel default(shared) private(bra,bra0,a,b, phase_ab,bra_ab,ch_ab, kind1,k,ch2)
+        !$omp parallel default(shared) private(bra,bra0,a,b, phase_ab,bra_ab,ch_ab, kind1,k,ch2, ket_confs, acc)
+        ALLOCATE( acc(max_ket) )
         !$omp do schedule(dynamic)
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
@@ -670,18 +688,22 @@ SUBROUTINE t3_eqn
               phase_ab = 1
               bra_ab = bra0
               ch_ab = ch1
-           
+
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
+              ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
+              IF ( ket_confs <= 0 ) cycle
+              acc(1:ket_confs) = 0.d0
               ! <abc|t|ijk> <-- -<cd|t|ij>.<ab|v|kd>
-              CALL t3_diag1(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab,bra_min, phase_ab, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
+              CALL t3_diag1(ch3, ch_ab,ch2, c,k, bra_ab, phase_ab, acc)
               ! <abc|t|ijk> <-- +<ab|t|lk>.<lc|v|ij>
-              CALL t3_diag2(ch3, ch_ab,ch2, cind1,kind1, c,k, bra,bra_ab,bra_min, phase_ab, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
+              CALL t3_diag2(ch3, ch_ab,ch2, c,k, bra_ab, phase_ab, acc)
+              t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) = &
+                   t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) + acc(1:ket_confs)
            end DO
-        end DO        
+        end DO
         !$omp end do
+        DEALLOCATE( acc )
         !$omp end parallel
      end DO
      
@@ -695,7 +717,8 @@ SUBROUTINE t3_eqn
         IF ( bra_min <= 0 ) CYCLE
         IF ( bra_max < bra_min ) CYCLE
         
-        !$omp parallel default(shared) private(bra,bra0,a,b, phase_cb,bra_cb,ch_cb, kind1,k,ch2)
+        !$omp parallel default(shared) private(bra,bra0,a,b, phase_cb,bra_cb,ch_cb, kind1,k,ch2, ket_confs, acc)
+        ALLOCATE( acc(max_ket) )
         !$omp do schedule(dynamic)
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
@@ -709,18 +732,22 @@ SUBROUTINE t3_eqn
               phase_cb = -1
               bra_cb = pp_config_2b%ival2(c,b)
               IF ( b < c ) phase_cb = -phase_cb
-           
+
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
+              ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
+              IF ( ket_confs <= 0 ) cycle
+              acc(1:ket_confs) = 0.d0
               ! <abc|t|ijk> <-- +<ad|t|ij>.<cb|v|kd>
-              CALL t3_diag1(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb,bra_min, phase_cb, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
+              CALL t3_diag1(ch3, ch_cb,ch2, a,k, bra_cb, phase_cb, acc)
               ! <abc|t|ijk> <-- -<cb|t|lk>.<la|v|ij>
-              CALL t3_diag2(ch3, ch_cb,ch2, cind1,kind1, a,k, bra,bra_cb,bra_min, phase_cb, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
+              CALL t3_diag2(ch3, ch_cb,ch2, a,k, bra_cb, phase_cb, acc)
+              t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) = &
+                   t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) + acc(1:ket_confs)
            end DO
-        end DO        
+        end DO
         !$omp end do
+        DEALLOCATE( acc )
         !$omp end parallel
      end DO
 
@@ -734,7 +761,8 @@ SUBROUTINE t3_eqn
         IF ( bra_min <= 0 ) CYCLE
         IF ( bra_max < bra_min ) CYCLE
         
-        !$omp parallel default(shared) private(bra,bra0,a,b, phase_ac,bra_ac,ch_ac, kind1,k,ch2)
+        !$omp parallel default(shared) private(bra,bra0,a,b, phase_ac,bra_ac,ch_ac, kind1,k,ch2, ket_confs, acc)
+        ALLOCATE( acc(max_ket) )
         !$omp do schedule(dynamic)
         DO bra = bra_min, bra_max
            DO kind1 = 1, klimit_t3(ch3)
@@ -748,18 +776,22 @@ SUBROUTINE t3_eqn
               phase_ac = -1
               bra_ac = pp_config_2b%ival2(a,c)
               IF ( c < a ) phase_ac = -phase_ac
-              
+
               k    = klist_t3(ch3)%ival2(kind1,1)
               ch2  = klist_t3(ch3)%ival2(kind1,2)
+              ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
+              IF ( ket_confs <= 0 ) cycle
+              acc(1:ket_confs) = 0.d0
               ! <abc|t|ijk> <-- +<bd|t|ij>.<ac|v|kd>
-              CALL t3_diag1(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac,bra_min, phase_ac, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
+              CALL t3_diag1(ch3, ch_ac,ch2, b,k, bra_ac, phase_ac, acc)
               ! <abc|t|ijk> <-- -<ac|t|lk>.<lb|v|ij>
-              CALL t3_diag2(ch3, ch_ac,ch2, cind1,kind1, b,k, bra,bra_ac,bra_min, phase_ac, &
-                    t3_ccm(ch3)%val2(cind1,kind1)%cval)
-           end DO           
-        end DO        
+              CALL t3_diag2(ch3, ch_ac,ch2, b,k, bra_ac, phase_ac, acc)
+              t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) = &
+                   t3_ccm(ch3)%val2(cind1,kind1)%cval(bra,1:ket_confs) + acc(1:ket_confs)
+           end DO
+        end DO
         !$omp end do
+        DEALLOCATE( acc )
         !$omp end parallel
      end DO
      
@@ -791,8 +823,9 @@ SUBROUTINE antisymmetrize_t3
   REAL(dp) :: phase, startwtime, endwtime
   INTEGER, allocatable :: klist_inv(:)
   TYPE (superblock_storage) :: hh_t3_temp
-  TYPE (superblock_storage) :: t3_temp
-  COMPLEX(dpc), POINTER :: wk(:,:)
+  ! copy of one cind1 slab, same kind as T3 storage (a dpc copy would be 2x the slab)
+  TYPE (t3_block_view), ALLOCATABLE :: t3_temp(:)
+  COMPLEX(t3c), POINTER :: wk(:,:)
   
   CALL assert_built('t3', 'antisymmetrize_t3')
 
@@ -833,17 +866,16 @@ SUBROUTINE antisymmetrize_t3
         bra_max = mapping_t3(ch3)%ival2(cind1,2)
         IF ( bra_min <= 0 ) CYCLE
         IF ( bra_max < bra_min ) CYCLE
-        ALLOCATE( t3_temp%val1(1:klimit_t3(ch3)) )
-        
+        ALLOCATE( t3_temp(1:klimit_t3(ch3)) )
+
         ! Allocate and Fill t3_temp for all k_channels
         DO kind1 = 1, klimit_t3(ch3)
            IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
            ch2       = klist_t3(ch3)%ival2(kind1,2)
            ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
            IF ( ket_confs <= 0 ) cycle
-           ALLOCATE( t3_temp%val1(kind1)%cval(bra_min:bra_max,ket_confs) )
-           t3_temp%val1(kind1)%cval = 0.d0
-           t3_temp%val1(kind1)%cval(bra_min:bra_max,:) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:)
+           ALLOCATE( t3_temp(kind1)%cval(bra_min:bra_max,ket_confs) )
+           t3_temp(kind1)%cval(bra_min:bra_max,:) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:)
         end DO
         
         DO kind1 = 1, klimit_t3(ch3)
@@ -863,7 +895,7 @@ SUBROUTINE antisymmetrize_t3
               j    = lookup_2b_configs(1,ch2)%ival2(2,ket0)
               iind = klist_inv(i)
               IF ( iind == 0 ) cycle
-              IF ( .not. allocated(t3_temp%val1(iind)%cval) ) cycle
+              IF ( .not. associated(t3_temp(iind)%cval) ) cycle
               ch_i = klist_t3(ch3)%ival2(iind,2)
               IF ( ch_i == 0 ) cycle
               IF ( ch_i /= hh_channel_2b%ival2(k,j) ) cycle
@@ -874,7 +906,7 @@ SUBROUTINE antisymmetrize_t3
               IF ( j < k ) phase = -phase
 
               wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
-                   - phase * t3_temp%val1(iind)%cval(bra_min:bra_max,ket1)
+                   - phase * t3_temp(iind)%cval(bra_min:bra_max,ket1)
            end DO
            !$omp end do
            
@@ -886,7 +918,7 @@ SUBROUTINE antisymmetrize_t3
               j    = lookup_2b_configs(1,ch2)%ival2(2,ket0)
               jind = klist_inv(j)
               IF ( jind == 0 ) cycle
-              IF ( .not. allocated(t3_temp%val1(jind)%cval) ) cycle
+              IF ( .not. associated(t3_temp(jind)%cval) ) cycle
               ch_j = klist_t3(ch3)%ival2(jind,2)
               IF ( ch_j == 0 ) cycle
               IF ( ch_j /= hh_channel_2b%ival2(i,k) ) cycle
@@ -897,17 +929,17 @@ SUBROUTINE antisymmetrize_t3
               IF ( k < i ) phase = -phase
 
               wk(bra_min:bra_max,ket) = wk(bra_min:bra_max,ket) &
-                   - phase * t3_temp%val1(jind)%cval(bra_min:bra_max,ket1)
+                   - phase * t3_temp(jind)%cval(bra_min:bra_max,ket1)
            end DO
            !$omp end do
            !$omp end parallel
         end DO
         
         DO kind1 = 1, klimit_t3(ch3)
-           IF ( .not. allocated(t3_temp%val1(kind1)%cval) ) cycle
-           DEALLOCATE( t3_temp%val1(kind1)%cval )
+           IF ( .not. associated(t3_temp(kind1)%cval) ) cycle
+           DEALLOCATE( t3_temp(kind1)%cval )
         end DO
-        DEALLOCATE( t3_temp%val1 )
+        DEALLOCATE( t3_temp )
         
      end DO
      
@@ -954,7 +986,7 @@ SUBROUTINE t3_denom
   INTEGER :: ket_confs, bra_min,bra_max
   INTEGER :: a,b,c, i,j,k, cind1,kind1
   COMPLEX(dpc) :: denom
-  COMPLEX(dpc), POINTER :: wk(:,:)
+  COMPLEX(t3c), POINTER :: wk(:,:)
 
   CALL assert_built('t3',   't3_denom')
   CALL assert_built('hbar', 't3_denom')

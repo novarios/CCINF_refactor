@@ -449,13 +449,13 @@ SUBROUTINE setup_t3_amplitudes(fill)
   END DO
   IF ( iam == 0 ) THEN
      write(6,'(A,F12.2,A)') '  T3 total memory estimate:  ', &
-          REAL(ndim3,dp) * 16.0_dp / 1.0e9_dp, ' GB (all ranks)'
+          REAL(ndim3,dp) * t3_bytes / 1.0e9_dp, ' GB (all ranks)'
   END IF
   nelem = total  ! save local for allreduce
   CALL mpi_allreduce(total, nelem, 1, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, ierror)
   IF ( iam == 0 ) THEN
      write(6,'(A,F12.2,A)') '  T3 max rank needs:         ', &
-          REAL(nelem,dp) * 16.0_dp / 1.0e9_dp, ' GB'
+          REAL(nelem,dp) * t3_bytes / 1.0e9_dp, ' GB'
      write(6,'(A,F12.2,A)') '  Already allocated:         ', &
           mem_total_local() / 1.0e9_dp, ' GB'
      write(6,*)
@@ -503,7 +503,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
         IF ( istat /= 0 ) THEN
            WRITE(error_unit,'(A,I6,A,I8,A,I8,A,I14,A)') &
                 'RANK ', iam, ': ALLOC FAILED for T3 buf, ch3=', ch3, &
-                ' cind1=', cind1, ' requested=', total*16, ' bytes'
+                ' cind1=', cind1, ' requested=', total*t3_bytes, ' bytes'
            CALL MPI_ABORT(MPI_COMM_WORLD, 1, ierror)
         END IF
         t3_ccm(ch3)%pack1(cind1)%buf = 0.d0
@@ -520,7 +520,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
            t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,1:ket_confs) => &
                 t3_ccm(ch3)%pack1(cind1)%buf(offset : offset + nelem - 1)
 
-           CALL mem_register('t3', REAL(nrow*ket_confs * 16.d0, dp))
+           CALL mem_register('t3', REAL(nelem,dp) * t3_bytes)
            
            offset = offset + nelem
         END DO
@@ -572,7 +572,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
            IF ( istat /= 0 ) THEN
               WRITE(error_unit,'(A,I6,A,I8,A,I8,A,I14,A)') &
                    'RANK ', iam, ': ALLOC FAILED for T3_CCM0 buf, ch3=', ch3, &
-                   ' cind1=', cind1, ' requested=', total*16, ' bytes'
+                   ' cind1=', cind1, ' requested=', total*t3_bytes, ' bytes'
               CALL MPI_ABORT(MPI_COMM_WORLD, 1, ierror)
            END IF
            t3_ccm0(ch3)%pack1(cind1)%buf = 0.d0
@@ -589,7 +589,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
               t3_ccm0(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,1:ket_confs) => &
                    t3_ccm0(ch3)%pack1(cind1)%buf(offset : offset + nelem - 1)
 
-              CALL mem_register('t3_v3b', REAL(nrow*ket_confs * 16.d0, dp))
+              CALL mem_register('t3_v3b', REAL(nelem,dp) * t3_bytes)
 
               ! Fill with 3-body matrix elements
               !$omp parallel default(shared) private(bra,ket,bra0,ket0, a,b,i,j, v3b)

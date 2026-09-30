@@ -444,7 +444,7 @@ SUBROUTINE t3_w3_eqn2
   INTEGER :: dim1,dim2,dim3
   REAL(dp) :: startwtime, endwtime
   COMPLEX(dpc) :: v3b
-  COMPLEX(dpc), ALLOCATABLE :: w3_temp(:,:)
+  COMPLEX(dpc), ALLOCATABLE :: w3_temp(:,:), t3_blk(:,:)
   
   IF ( iam == 0 ) WRITE(6,'(A29)',advance='no') " ...Computing T3 <- W3_2...  "
   startwtime = MPI_WTIME()
@@ -486,9 +486,14 @@ SUBROUTINE t3_w3_eqn2
            dim1 = bra_max - bra_min + 1
            dim2 = ket_confs
            dim3 = ket_confs0
+           ! T3 may be stored in single precision; accumulate in a dpc block, then add
+           ALLOCATE( t3_blk(bra_min:bra_max, ket_confs) )
+           t3_blk = 0.d0
            CALL ZGEMM ( 'n', 'n', dim1, dim2, dim3, dcmplx(1.d0,0.d0), w3_temp(bra_min:bra_max,:), dim1, &
-                t2_ccm(ch2)%cval, dim3, dcmplx(1.d0,0.d0), t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:), dim1 )
-           
+                t2_ccm(ch2)%cval, dim3, dcmplx(0.d0,0.d0), t3_blk, dim1 )
+           t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:) = t3_ccm(ch3)%val2(cind1,kind1)%cval(bra_min:bra_max,:) + t3_blk
+           DEALLOCATE( t3_blk )
+
            DEALLOCATE( w3_temp )           
         end DO
      end DO
