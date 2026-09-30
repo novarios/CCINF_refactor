@@ -412,147 +412,162 @@ SUBROUTINE t2_t3_eqn
   USE mpi_check
   
   IMPLICIT NONE
-  INTEGER :: ch3, ch1,ch2, ket_confs
+  INTEGER :: ch3, ch1,ch2, ket_confs, nrow
   INTEGER :: bra0,ket0, bra,ket, bra_min,bra_max
-  INTEGER :: a,b,c, i,j,k, dim1,dim3
-  INTEGER :: aind, kind1, cind1, iind
-  INTEGER :: n, m
+  INTEGER :: a,b,c, i,j,k, cind1,kind1
+  INTEGER :: n1,n2, m, max_nrow,max_ket
   REAL(dp) :: phase
+  COMPLEX(dpc) :: s
   INTEGER, allocatable :: plist(:), hlist(:)
-  COMPLEX(dpc), allocatable :: temp_mtx(:,:), temp_v2b(:,:), temp_t3(:,:)
+  ! dpc workspaces, allocated once (the n dimension grows if a block needs more)
+  COMPLEX(dpc), allocatable :: vcol(:,:), out1(:,:), vrow(:,:), out2(:,:)
+  COMPLEX(t3c), POINTER :: t3b(:,:)
 
   CALL assert_built('t2', 't2_t3_eqn')
   CALL assert_built('t3', 't2_t3_eqn')
 
   IF ( iam == 0 ) WRITE(6,*) "...Computing T2 <- T3..."
 
-  ! the ZGEMMs only produce the rows/columns that get scattered into T2
+  ! largest block on this rank
+  max_nrow = 1
+  max_ket  = 1
+  DO ch3 = ch3_min, ch3_max
+     DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
+        max_nrow = max(max_nrow, mapping_t3(ch3)%ival2(cind1,2) - mapping_t3(ch3)%ival2(cind1,1) + 1)
+     END DO
+     DO kind1 = 1, klimit_t3(ch3)
+        ch2 = klist_t3(ch3)%ival2(kind1,2)
+        IF ( ch2 > 0 ) max_ket = max(max_ket, number_2b_t3(ch3)%ival2(2,ch2))
+     END DO
+  END DO
   ALLOCATE( plist(tot_orbs-below_ef), hlist(below_ef) )
+  ALLOCATE( vcol(max_nrow,2), out1(2,max_ket), vrow(max_ket,2), out2(max_nrow,2) )
 
   !
-  ! <ab|t|ij> <-- + (1/2).P(ab).<cda|t|kji>.<kb|v|cd>
-  !               - (1/2).P(ab).<cda|t|ijk>.<kb|v|cd>
+  ! Each T3 block (cind1,kind1) feeds both terms:
+  !   term 1:  <ab|t|ij> <-- + (1/2).P(ab).<cda|t|kji>.<kb|v|cd>
+  !   term 2:  <ab|t|ij> <-- - (1/2).P(ij).<bca|t|kli>.<kl|v|jc>
+  ! Momentum conservation leaves only a few b (term 1) and j (term 2) per block,
+  ! so both are block x (few vectors); done in one sweep over the block's columns,
+  ! reading the T3 storage in place and accumulating in dpc.
   DO ch3 = ch3_min, ch3_max
-     DO aind = climits_t3(ch3,1), climits_t3(ch3,2)
-        a       = clist_t3(ch3)%ival2(aind,1)
-        ch1     = clist_t3(ch3)%ival2(aind,2)
-        bra_min = mapping_t3(ch3)%ival2(aind,1)
-        bra_max = mapping_t3(ch3)%ival2(aind,2)
+     DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
+        bra_min = mapping_t3(ch3)%ival2(cind1,1)
+        bra_max = mapping_t3(ch3)%ival2(cind1,2)
         IF ( bra_min <= 0 ) CYCLE
         IF ( bra_max < bra_min ) CYCLE
+        nrow = bra_max - bra_min + 1
+        ch1  = clist_t3(ch3)%ival2(cind1,2)
 
         DO kind1 = 1, klimit_t3(ch3)
-           IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(aind,kind1)%cval) ) cycle
-           k         = klist_t3(ch3)%ival2(kind1,1)
+           IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,kind1)%cval) ) cycle
            ch2       = klist_t3(ch3)%ival2(kind1,2)
            ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
            IF ( ket_confs <= 0 ) CYCLE
 
-           ! particles b with (k,b) in ch1 and (a,b) in ch2
-           n = 0
+           ! this block's particle/hole, named as in each term
+           a = clist_t3(ch3)%ival2(cind1,1)     ! term 1: <cda|t|ijk>
+           k = klist_t3(ch3)%ival2(kind1,1)
+           c = a                                ! term 2: <abc|t|kli>
+           i = k
+
+           ! term 1: particles b with (k,b) in ch1 and (a,b) in ch2
+           n1 = 0
            DO b = below_ef+1, tot_orbs
               IF ( b == a ) cycle
               IF ( hp_channel_2b%ival2(k,b) /= ch1 ) cycle
               IF ( pp_channel_2b%ival2(a,b) /= ch2 ) cycle
-              n = n + 1
-              plist(n) = b
+              n1 = n1 + 1
+              plist(n1) = b
            END DO
-           IF ( n == 0 ) cycle
-
-           ! <kb|v|cd>.<cda|t|ijk>
-           dim3 = bra_max-bra_min+1
-           ALLOCATE( temp_v2b(bra_min:bra_max, n), temp_mtx(n, ket_confs) )
-           DO m = 1, n
-              ket0 = hp_config_2b%ival2(k, plist(m))
-              DO bra = bra_min, bra_max
-                 bra0 = pp_config_t3(ch3)%ival1(ch1)%ival1(bra)
-                 temp_v2b(bra,m) = conjg( v2b_pphp(ch1)%cval(bra0,ket0) )
-              END DO
-           END DO
-           ! T3 may be stored in single precision; ZGEMM needs a dpc copy of the block
-           ALLOCATE( temp_t3(bra_min:bra_max,ket_confs) )
-           temp_t3 = t3_ccm(ch3)%val2(aind,kind1)%cval(bra_min:bra_max,1:ket_confs)
-           CALL ZGEMM ( 't', 'n', n, ket_confs, dim3, dcmplx(1.d0,0.d0), temp_v2b, dim3, &
-                temp_t3, dim3, dcmplx(0.d0,0.d0), temp_mtx, n )
-           DEALLOCATE( temp_t3 )
-
-           DO m = 1, n
-              b = plist(m)
-              phase = 1
-              IF ( b < a ) phase = -phase
-              bra0 = pp_config_2b%ival2(a,b)
-              DO ket  = 1, ket_confs
-                 ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-                 t2_ccm_eqn(ch2)%cval(bra0,ket0) = t2_ccm_eqn(ch2)%cval(bra0,ket0) - phase * temp_mtx(m,ket)
-              end DO
-           end DO
-           DEALLOCATE( temp_v2b, temp_mtx )
-        end DO
-     end DO
-  end DO
-
-  !
-  ! <ab|t|ij> <-- - (1/2).P(ij).<bca|t|kli>.<kl|v|jc>
-  !               - (1/2).P(ij).<abc|t|kli>.<kl|v|jc>
-  DO ch3 = ch3_min, ch3_max
-     DO iind = 1, klimit_t3(ch3)
-        i         = klist_t3(ch3)%ival2(iind,1)
-        ch2       = klist_t3(ch3)%ival2(iind,2)
-        ket_confs = number_2b_t3(ch3)%ival2(2,ch2)
-        IF ( ket_confs <= 0 ) CYCLE
-
-        DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
-           IF ( .not. ASSOCIATED(t3_ccm(ch3)%val2(cind1,iind)%cval) ) cycle
-           c       = clist_t3(ch3)%ival2(cind1,1)
-           ch1     = clist_t3(ch3)%ival2(cind1,2)
-           bra_min = mapping_t3(ch3)%ival2(cind1,1)
-           bra_max = mapping_t3(ch3)%ival2(cind1,2)
-           IF ( bra_min <= 0 ) CYCLE
-           IF ( bra_max < bra_min ) CYCLE
-
-           ! holes j with (j,c) in ch2 and (i,j) in ch1
-           n = 0
+           ! term 2: holes j with (j,c) in ch2 and (i,j) in ch1
+           n2 = 0
            DO j = 1, below_ef
               IF ( j == i ) cycle
               IF ( hp_channel_2b%ival2(j,c) /= ch2 ) cycle
               IF ( hh_channel_2b%ival2(i,j) /= ch1 ) cycle
-              n = n + 1
-              hlist(n) = j
+              n2 = n2 + 1
+              hlist(n2) = j
            END DO
-           IF ( n == 0 ) cycle
+           IF ( n1 + n2 == 0 ) cycle
 
-           ! <abc|t|kli>.<kl|v|jc>
-           dim1 = bra_max-bra_min+1
-           ALLOCATE( temp_v2b(ket_confs, n), temp_mtx(bra_min:bra_max, n) )
-           DO m = 1, n
+           IF ( n1 > size(vcol,2) ) THEN
+              DEALLOCATE( vcol, out1 )
+              ALLOCATE( vcol(max_nrow,n1), out1(n1,max_ket) )
+           END IF
+           IF ( n2 > size(vrow,2) ) THEN
+              DEALLOCATE( vrow, out2 )
+              ALLOCATE( vrow(max_ket,n2), out2(max_nrow,n2) )
+           END IF
+
+           ! term 1 vectors: vcol(:,m) = <kb|v|cd>*  over this block's rows (cd)
+           DO m = 1, n1
+              ket0 = hp_config_2b%ival2(k, plist(m))
+              DO bra = bra_min, bra_max
+                 bra0 = pp_config_t3(ch3)%ival1(ch1)%ival1(bra)
+                 vcol(bra-bra_min+1,m) = conjg( v2b_pphp(ch1)%cval(bra0,ket0) )
+              END DO
+           END DO
+           ! term 2 vectors: vrow(:,m) = <kl|v|jc>*  over this block's columns (kl)
+           DO m = 1, n2
               bra0 = hp_config_2b%ival2(hlist(m), c)
               DO ket = 1, ket_confs
                  ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
-                 temp_v2b(ket,m) = conjg( v2b_hphh(ch2)%cval(bra0,ket0) )
+                 vrow(ket,m) = conjg( v2b_hphh(ch2)%cval(bra0,ket0) )
               END DO
            END DO
-           ALLOCATE( temp_t3(bra_min:bra_max,ket_confs) )
-           temp_t3 = t3_ccm(ch3)%val2(cind1,iind)%cval(bra_min:bra_max,1:ket_confs)
-           CALL ZGEMM ( 'n', 'n', dim1, n, ket_confs, dcmplx(1.d0,0.d0), temp_t3, dim1, &
-                temp_v2b, ket_confs, dcmplx(0.d0,0.d0), temp_mtx, dim1 )
-           DEALLOCATE( temp_t3 )
 
-           DO m = 1, n
+           ! one sweep over the block, column by column; threaded only for large
+           ! blocks (per-block region + reduction overhead dominates small ones)
+           t3b => t3_ccm(ch3)%val2(cind1,kind1)%cval
+           out2 = 0.d0
+           !$omp parallel do if( int(nrow,8)*ket_confs > 100000_8 ) default(shared) &
+           !$omp private(ket, m, bra, s) reduction(+:out2) schedule(static)
+           DO ket = 1, ket_confs
+              ! term 1: out1(m,ket) = sum_bra vcol(bra,m) * t3(bra,ket)
+              DO m = 1, n1
+                 s = 0.d0
+                 DO bra = bra_min, bra_max
+                    s = s + vcol(bra-bra_min+1,m) * t3b(bra,ket)
+                 END DO
+                 out1(m,ket) = s
+              END DO
+              ! term 2: out2(bra,m) += t3(bra,ket) * vrow(ket,m)
+              DO m = 1, n2
+                 DO bra = bra_min, bra_max
+                    out2(bra-bra_min+1,m) = out2(bra-bra_min+1,m) + t3b(bra,ket) * vrow(ket,m)
+                 END DO
+              END DO
+           END DO
+           !$omp end parallel do
+
+           ! scatter term 1 -> <ab|t|ij> in ch2
+           DO m = 1, n1
+              b = plist(m)
+              phase = 1
+              IF ( b < a ) phase = -phase
+              bra0 = pp_config_2b%ival2(a,b)
+              DO ket = 1, ket_confs
+                 ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
+                 t2_ccm_eqn(ch2)%cval(bra0,ket0) = t2_ccm_eqn(ch2)%cval(bra0,ket0) - phase * out1(m,ket)
+              END DO
+           END DO
+           ! scatter term 2 -> <ab|t|ij> in ch1
+           DO m = 1, n2
               j = hlist(m)
               phase = 1
               IF ( j < i ) phase = -phase
               ket0 = hh_config_2b%ival2(i,j)
               DO bra = bra_min, bra_max
                  bra0 = pp_config_t3(ch3)%ival1(ch1)%ival1(bra)
-                 t2_ccm_eqn(ch1)%cval(bra0,ket0) = t2_ccm_eqn(ch1)%cval(bra0,ket0) - phase * temp_mtx(bra,m)
-              end DO
-           end DO
-           DEALLOCATE( temp_v2b, temp_mtx )
-        end DO
-     end DO
-  end DO
+                 t2_ccm_eqn(ch1)%cval(bra0,ket0) = t2_ccm_eqn(ch1)%cval(bra0,ket0) - phase * out2(bra-bra_min+1,m)
+              END DO
+           END DO
+        END DO
+     END DO
+  END DO
 
-  DEALLOCATE( plist, hlist )
+  DEALLOCATE( plist, hlist, vcol, out1, vrow, out2 )
 
 end SUBROUTINE t2_t3_eqn
 
