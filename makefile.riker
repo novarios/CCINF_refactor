@@ -1,0 +1,34 @@
+LOCAL_INCLUDE = ${NUCCOR_INCLUDE}
+
+HDF5_INCLUDEDIR = ${HDF5_DIR}/include
+HDF5_LIBDIR     = ${HDF5_DIR}/lib
+HDF5_INCLUDE    = -I${HDF5_INCLUDEDIR}
+
+HDF5_LIBS = -L${HDF5_LIBDIR} \
+            -lhdf5_hl_fortran \
+            -lhdf5_hl \
+            -lhdf5_fortran \
+            -lhdf5 \
+            -Wl,-rpath,${HDF5_LIBDIR}
+
+LIB = -lrt -lm
+
+COMP = mpifort \
+     -ffree-line-length-0 \
+     -fdiagnostics-color=always \
+     -Wall -Wextra \
+     -fopenmp \
+     -frecursive \
+     -fno-stack-arrays \
+     -fallow-argument-mismatch
+
+FC = ${COMP} -O3
+FCD = ${COMP} -Og -g -fcheck=all -ffpe-trap=invalid,zero,overflow -fbacktrace
+
+LIBS = -lopenblas -lgsl ${HDF5_LIBS} -lz ${LIB}
+INCLUDE = ${LOCAL_INCLUDE} ${HDF5_INCLUDE}
+
+XLF = ${FC} ${INCLUDE}
+# XLF = ${FCD} ${INCLUDE}
+
+include makefile.common
