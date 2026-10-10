@@ -73,7 +73,10 @@ MODULE constants
   INTEGER, DIMENSION(-1:1), PUBLIC :: NF2
   CHARACTER(len=80) :: cc_file0, interaction
   ! eom stuff
-  INTEGER, PUBLIC :: eom_states, eom_iterations
+  INTEGER, PUBLIC :: eom_iterations, eom_nfound
+  COMPLEX(dpc), ALLOCATABLE, PUBLIC :: eom_eigs(:) ! candidate roots of the current target
+  REAL(dp), ALLOCATABLE, PUBLIC :: eom_wts(:)      ! their 1p (1h) weights
+  REAL(dp), ALLOCATABLE, PUBLIC :: eom_res(:)      ! and Arnoldi residuals
   INTEGER, PUBLIC :: nx_paeom, ny_paeom, nz_paeom, tz_paeom
   INTEGER, PUBLIC :: nx_preom, ny_preom, nz_preom, tz_preom
   INTEGER(i8), PUBLIC :: eom_ndim2, eom_ndim3, eom_ndim
@@ -91,6 +94,8 @@ MODULE constants
   INTEGER, PUBLIC :: add_p=0                   ;namelist /args/ add_p
   INTEGER, PUBLIC :: eom_approx=0              ;namelist /args/ eom_approx
   INTEGER, PUBLIC :: eom3_cut=1000             ;namelist /args/ eom3_cut
+  INTEGER, PUBLIC :: eom_states=1              ;namelist /args/ eom_states
+  INTEGER, PUBLIC :: eom_qp=0                  ;namelist /args/ eom_qp
   INTEGER, PUBLIC :: pre_gs=0                  ;namelist /args/ pre_gs
   INTEGER, PUBLIC :: test=0                    ;namelist /args/ test
   INTEGER, PUBLIC :: debug_contracts_flag=1    ;namelist /args/ debug_contracts_flag
@@ -272,7 +277,6 @@ MODULE operator_storage
   ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   INTEGER, ALLOCATABLE, PUBLIC :: r1_paeom_ind(:), r2_paeom_ind(:), r2_paeom_ind_cross(:)  
-  COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: paeom_eigs
   COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: r1_paeom
   COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: r1_paeom_eqn
   TYPE (block_storage), ALLOCATABLE, PUBLIC :: r2_paeom(:)
@@ -302,7 +306,6 @@ MODULE operator_storage
   ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   INTEGER, ALLOCATABLE, PUBLIC :: r1_preom_ind(:), r2_preom_ind(:), r2_preom_ind_cross(:)  
-  COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: preom_eigs
   COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: r1_preom
   COMPLEX(dpc), DIMENSION(:), ALLOCATABLE :: r1_preom_eqn
   TYPE (block_storage), ALLOCATABLE, PUBLIC :: r2_preom(:)

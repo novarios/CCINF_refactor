@@ -103,6 +103,8 @@ PROGRAM ccdt
      IF ( pre_gs == 1 ) write(6,'(A14,8x,A3)') 'Load CC-File:', 'Yes'
      IF ( abs(add_n) > 0 ) write(6,'(A15,6x,I4)') 'Neutron PR/PA:', add_n
      IF ( abs(add_p) > 0 ) write(6,'(A14,7x,I4)') 'Proton PR/PA:', add_p
+     IF ( abs(add_n) > 0 .or. abs(add_p) > 0 ) write(6,'(A13,8x,I4)') 'EOM roots/k:', eom_states
+     IF ( abs(add_n) > 0 .or. abs(add_p) > 0 ) write(6,'(A13,8x,I4)') 'EOM qp mode:', eom_qp
      IF ( cc_approx >= 0 ) write(6,*) 'CC-File:             ', trim(cc_file)
      write(6,*)
   end IF

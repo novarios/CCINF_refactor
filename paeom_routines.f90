@@ -698,8 +698,6 @@ SUBROUTINE deallocate_paeom
   CALL deallocate_hbar2b_I6pa
   CALL deallocate_hbar3b_paeom
   
-  DEALLOCATE( paeom_eigs )
-  
   DEALLOCATE( r1_paeom_ind )
   DEALLOCATE( r1_paeom )
   DEALLOCATE( r1_paeom_eqn )

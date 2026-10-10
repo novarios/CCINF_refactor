@@ -698,8 +698,6 @@ SUBROUTINE deallocate_preom
   CALL deallocate_hbar2b_I7pr
   CALL deallocate_hbar3b_preom
   
-  DEALLOCATE( preom_eigs )
-  
   DEALLOCATE( r1_preom_ind )
   DEALLOCATE( r1_preom )
   DEALLOCATE( r1_preom_eqn )
