@@ -112,7 +112,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
   INTEGER :: num_ch0, chmin, chmax, ch_pr_proc
   INTEGER(i8) :: ndim3, total, offset, nelem
   INTEGER(i8) :: slab, max_slab, nstore
-  REAL(dp) :: peak
+  REAL(dp) :: peak, startwtime
   COMPLEX(dpc) :: v3b
   INTEGER :: istat
 
@@ -544,6 +544,7 @@ SUBROUTINE setup_t3_amplitudes(fill)
 
   ! Allocate and fill t3_ccm0 (3-body matrix elements) for tnf_approx > 1
   IF ( tnf_approx > 1 ) THEN
+     startwtime = MPI_WTIME()
      DO ch3 = ch3_min, ch3_max
         IF (climits_t3(ch3,2) < climits_t3(ch3,1)) CYCLE
         ALLOCATE( t3_ccm0(ch3)%val2(climits_t3(ch3,1):climits_t3(ch3,2), klimit_t3(ch3)) )
@@ -623,6 +624,8 @@ SUBROUTINE setup_t3_amplitudes(fill)
            END DO
         end DO
      end DO
+     CALL mpi_barrier(mpi_comm_world, ierror)
+     IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T3 V3 Fill...        ', MPI_WTIME() - startwtime, ' sec.'
      CALL mem_report('T3 3-body matrix elements')
   END IF
 

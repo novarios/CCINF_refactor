@@ -22,6 +22,7 @@ SUBROUTINE setup_2b_interaction
   INTEGER :: a,b,c,d, i,j,k,l, h,p, phase, count1, count2
   COMPLEX(dpc) :: v2b, v3b, vtmp, e0_1,e0_2,e0_3, e_tmp
   COMPLEX(dpc), ALLOCATABLE :: fock_mtx0(:,:)
+  REAL(dp) :: startwtime
 
   CALL assert_built('channels_2b', 'setup_2b_interaction')
   CALL assert_built('mappings',    'setup_2b_interaction')
@@ -133,6 +134,7 @@ SUBROUTINE setup_2b_interaction
   !
   IF ( tnf_approx > 0 ) then
      IF ( iam == 0 ) write(6,*) '...Normal-Ordering 3NF...'
+     startwtime = MPI_WTIME()
      ! CALL v2b_hphp_cross_3b(fock_mtx0)
      CALL v2b_hhhh_3b(fock_mtx0, e0_3)
      IF ( iam == 0 ) write(6,*) 'hhhh done.'
@@ -146,12 +148,15 @@ SUBROUTINE setup_2b_interaction
      IF ( iam == 0 ) write(6,*) 'pphh done.'
      CALL v2b_pppp_3b
      IF ( iam == 0 ) write(6,*) 'pppp done.'
+     CALL mpi_barrier(mpi_comm_world, ierror)
+     IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...3NF Normal-Order...  ', MPI_WTIME() - startwtime, ' sec.'
   end IF
-    
+
   !
-  ! 2N contributions  
+  ! 2N contributions
   !
   IF ( iam == 0 ) write(6,*) '...Normal-Ordering 2NF...'
+  startwtime = MPI_WTIME()
   ! CALL v2b_hphp_cross_2b(fock_mtx0)
   CALL v2b_hhhh_2b(fock_mtx0, e0_2)
   IF ( iam == 0 ) write(6,*) 'hhhh done.'
@@ -165,6 +170,9 @@ SUBROUTINE setup_2b_interaction
   IF ( iam == 0 ) write(6,*) 'pphp done.'
   CALL v2b_pppp_2b
   IF ( iam == 0 ) write(6,*) 'pppp done.'
+  CALL mpi_barrier(mpi_comm_world, ierror)
+  IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...2NF Normal-Order...  ', MPI_WTIME() - startwtime, ' sec.'
+  startwtime = MPI_WTIME()
 
   ! IF ( interaction(1:2) == "pw" ) call vrel%fin()
        
@@ -324,6 +332,8 @@ SUBROUTINE setup_2b_interaction
           mpi_complex16,mpi_sum,mpi_comm_world,ierror)
      CALL check_mpi(ierror, 'setup_2b_interaction', 'allreduce')
   end DO
+
+  IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...V Reduce/Recouple... ', MPI_WTIME() - startwtime, ' sec.'
 
   fock_built = .TRUE.
   interactions_built = .TRUE.
