@@ -80,7 +80,7 @@ MODULE constants
   REAL(dp), ALLOCATABLE, PUBLIC :: eom_str(:)      ! and 1p (1h) strengths s_i (eom_sf > 0)
   ! strength function (eom_sf > 0): final Arnoldi size m, Hessenberg h(1:m+1,1:m), all Ritz
   ! values/strengths/residuals, and the Lorentzian-smoothed A(E) on a grid (eom_sf = 2)
-  INTEGER, PUBLIC :: eom_m, eom_ngrid
+  INTEGER, PUBLIC :: eom_m, eom_ngrid, eom_add0   ! eom_add0: add_n (or add_p) as input
   LOGICAL, PUBLIC :: eom_sf_new = .TRUE.           ! create the _sf.h5 file on first write
   COMPLEX(dpc), ALLOCATABLE, PUBLIC :: eom_hess(:,:), eom_ritz(:), eom_ritz_s(:)
   REAL(dp), ALLOCATABLE, PUBLIC :: eom_ritz_res(:), eom_grid(:), eom_lit(:)

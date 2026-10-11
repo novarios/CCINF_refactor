@@ -854,7 +854,8 @@ end SUBROUTINE select_eom_root
 
 ! Strength-function output for the current target (eom_sf > 0), then free its arrays.
 ! Prints the LIT peak and FWHM (eom_sf = 2, in omega: E for PA, -E for PR) and writes to
-! <cc_file>_sf.h5, created on the first call of the run. Datasets per target, tag = PA<n>/PR<n>:
+! <cc_file>_eom<2|3>[_c<eom3_cut>]_<sum|lit>[_g<eom_gamma>]_<n|p><add>.h5, created on the first
+! call of the run. Datasets per target, tag = PA<n>/PR<n>:
 !  tag_info   (int)  m, nx, ny, nz, tz, eom_sf, eom_ngrid
 !  tag_params        eom_gamma, sign (+1 PA, -1 PR: omega = sign*E)
 !  tag_H_real/imag   Hessenberg matrix h(1:m+1,1:m) in E (Hbar eigenvalue) units
@@ -875,6 +876,7 @@ SUBROUTINE finish_eom_sf(pa)
   REAL(dp), ALLOCATABLE :: buf(:,:)
   CHARACTER(len=8) :: tag
   CHARACTER(len=200) :: sf_file
+  CHARACTER(len=20) :: str
 
   sgn = 1.d0
   IF ( .not. pa ) sgn = -1.d0
@@ -904,7 +906,24 @@ SUBROUTINE finish_eom_sf(pa)
   end IF
 
   IF ( iam == 0 ) then
-     sf_file = cc_file(1:len_trim(cc_file)-3) // '_sf.h5'
+     ! file name: ground-state name plus every EOM setting that changes the output
+     sf_file = cc_file(1:len_trim(cc_file)-3) // '_eom2'
+     IF ( eom_approx > 0 ) then
+        sf_file = cc_file(1:len_trim(cc_file)-3) // '_eom3'
+        IF ( eom3_cut < 1000 ) then
+           write(str,'(I0)') eom3_cut
+           sf_file = trim(sf_file) // '_c' // trim(str)
+        end IF
+     end IF
+     IF ( eom_sf == 1 ) sf_file = trim(sf_file) // '_sum'
+     IF ( eom_sf == 2 ) then
+        write(str,'(F0.2)') eom_gamma
+        IF ( str(1:1) == '.' ) str = '0' // str
+        sf_file = trim(sf_file) // '_lit_g' // trim(str)
+     end IF
+     write(str,'(I0)') eom_add0
+     IF ( add_n /= 0 ) sf_file = trim(sf_file) // '_n' // trim(str) // '.h5'
+     IF ( add_n == 0 ) sf_file = trim(sf_file) // '_p' // trim(str) // '.h5'
      IF ( eom_sf_new ) then
         CALL h5fcreate_f(trim(sf_file), H5F_ACC_TRUNC_F, file_id, error)
         eom_sf_new = .FALSE.

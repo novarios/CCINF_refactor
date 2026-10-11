@@ -148,6 +148,8 @@ PROGRAM ccdt
   else
      CALL ccdt_iter
   end IF
+  eom_add0 = add_n
+  IF ( add_n == 0 ) eom_add0 = add_p
   IF ( add_n == 100 .or. add_p == 100 ) then
      CALL compute_eom_states
   else IF ( add_n > 0 .or. add_p > 0 ) then
