@@ -101,6 +101,29 @@ def three_body_counts(cum, groups, cut, M, Wmax):
     return out
 
 
+# Riker cost model, fitted to the 2026-10-10 trial (nnlosat, rho=0.16, tnf=1, 16 ranks x 8 threads/node):
+# CCD Nmax 10-30 for pnm66/snm132 on 4 nodes, CCDT-1 snm132 Nmax 16/20 (4 nodes) and 24 (8 nodes).
+NODE_GB = 2200.0
+RANKS_PER_NODE = 16
+MEM_REP = (56.8, 0.083)          # GB/rank = a*t2_gb + b*pppp_gb (replicated, rank-independent; +-8%)
+T_CCD = (5.89e-7, 2.0, 1.31)     # CCD seconds on 4 nodes = c * orbs^p * holes^q (+-8% rms)
+T_T3 = (200.0, 6.7e-9)           # CCDT-1 extra seconds = a + b * ndim3 * 4/nodes (+-20-30%)
+
+
+def cost(row, nodes, mem_frac):
+    """Memory per rank, minimum nodes and wall-time estimates for one analysed row."""
+    rep = MEM_REP[0] * row['pphh_gb'] + MEM_REP[1] * row['pppp_gb']
+    t3 = row['t3_gb'] * 1.01                      # + antisym slab / imbalance (code's peak is ~0.3% over)
+    room = mem_frac * NODE_GB - RANKS_PER_NODE * rep
+    nmin = math.inf if room <= 0 else max(1, math.ceil(t3 / room))
+    n = nodes if nodes else nmin
+    gb_rank = rep + t3 / (RANKS_PER_NODE * n) if n != math.inf else math.inf
+    t_ccd = T_CCD[0] * row['orbs']**T_CCD[1] * row['holes']**T_CCD[2]
+    t_t3 = T_T3[0] + T_T3[1] * row['ndim3'] * 4 / n if n != math.inf else math.inf
+    return dict(rep_gb=rep, nodes_min=nmin, nodes=n, gb_rank=gb_rank,
+                node_frac=RANKS_PER_NODE * gb_rank / NODE_GB, t_ccd=t_ccd, t_ccdt1=t_ccd + t_t3)
+
+
 NMAXLIST0 = [0, 1, 2, 3, 4, 5, 6, 6, 7, 8, 9, 10, 11, 12, 13, 13, 14,   # index = n^2 (get_eom_ind)
              15, 16, 17, 18, 19, 20, 20, 21, 22, 23, 24, 24, 25, 26,
              26, 27, 28, 29, 30, 30, 32, 33, 34, 35, 36, 37, 38, 39]
@@ -300,7 +323,14 @@ def main():
     ap.add_argument('--no-count', action='store_true', help='skip the T3/2b counting (fast)')
     ap.add_argument('--eom3cut', type=int, help='also size the add_n=100 EOM states with this eom3_cut '
                     '(1000 = none); EOM3 is freed T3, so the run peak is max(T3, EOM3)')
+    ap.add_argument('--cost', action='store_true', help='Riker estimate: GB/rank, minimum nodes, CCD and '
+                    'CCDT-1 wall time at 16 ranks x 8 threads per node')
+    ap.add_argument('--nodes', type=int, help='with --cost: use this node count instead of the minimum')
+    ap.add_argument('--mem-frac', type=float, default=0.8, help='with --cost: usable fraction of node memory '
+                    '(default 0.8)')
     a = ap.parse_args()
+    if a.cost and a.no_count:
+        ap.error('--cost needs the T3/2b counting; drop --no-count')
 
     hdr = (f"{'sp':>3} {'A':>4} {'rho':>5} {'L':>6} {'kF':>5} | {'Nmax':>4} {'n2':>3} {'kmax':>5} {'k/kF':>5} | "
            f"{'t3cut':>5} {'E3':>7} {'E3/eF':>6} | {'orbs':>5} {'holes':>5}")
@@ -334,6 +364,16 @@ def main():
                 line += (f" | {r['ndim3']:14d} {r['t3_gb']:9.2f} {r['t3_rank_gb']:8.3f} "
                          f"{r['pppp_gb']:8.2f} {r['pphh_gb']:7.3f}")
             print(line)
+            if a.cost:
+                c = cost(r, a.nodes, a.mem_frac)
+                if c['nodes'] == math.inf:
+                    print(f"      cost: replicated {c['rep_gb']:.1f} GB/rank x {RANKS_PER_NODE} exceeds "
+                          f"{a.mem_frac:.0%} of a node")
+                else:
+                    warn = '  (over --mem-frac)' if c['node_frac'] > a.mem_frac else ''
+                    print(f"      cost: {c['nodes']} nodes (min {c['nodes_min']}) x {RANKS_PER_NODE}x8 | "
+                          f"{c['gb_rank']:.1f} GB/rank ({c['rep_gb']:.1f} replicated), {c['node_frac']:.0%} of node"
+                          f"{warn} | CCD {c['t_ccd'] / 60:.0f} min, CCDT-1 {c['t_ccdt1'] / 60:.0f} min")
             if 'eom' in r:
                 print(f"      {'add':>4} {'target n':>12} {'EOM2 dim':>10} {'EOM3 dim*':>14} {'EOM3 vec':>14} "
                       f"{'EOM3 alloc':>14} {'EOM2 GB':>8} {'EOM3 GB':>9}")
@@ -346,6 +386,10 @@ def main():
     print('\nkmax = 2pi*sqrt(n2)/L; E3 = (t3_cut+3)*hbar^2(2pi/L)^2/2m, the 3-particle excitation above the')
     print('Fermi surface allowed by cut3b. T3 GB is single precision, x2 with t3_ccm0 when tnf=2; GB/rank')
     print('assumes perfect balance and excludes the antisym temp. pppp is distributed, t2 (pphh) replicated.')
+    if a.cost:
+        print('cost: fit to the 2026-10-10 Riker trial (A=66 pnm, 132 snm, rho=0.16, tnf=1). Memory +-8%; CCD time')
+        print('+-8% (node count assumed not to matter); CCDT-1 extra +-20-30% (iteration counts vary). Other A')
+        print('extrapolate through orbs^2*holes^1.31: check one point before trusting. tnf=2 V3 fill not timed.')
     if a.eom3cut is not None:
         print('EOM: one state at a time; GB = 552 Krylov vectors (+ r3 for EOM3) in double complex, Hbar excluded.')
         print('EOM3 dim* is the cut count the code prints; the code allocates "alloc" and iterates "vec",')

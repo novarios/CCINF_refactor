@@ -161,7 +161,7 @@ SUBROUTINE compute_eom_states
      IF ( ind < 0 ) CALL setup_proc_mappings_preomvec
      IF ( ind > 0 ) CALL setup_proc_mappings_paeomvec
 
-     ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations) )
+     ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations), eom_str(eom_iterations) )
      IF ( ind < 0 ) then
         CALL mem_register('preom2', REAL(2 * eom_states * 4.d0, dp))
         CALL mem_register('preom2', REAL(eom_states * 16.d0, dp))
@@ -203,6 +203,7 @@ SUBROUTINE compute_eom_states
      CALL compute_right_eom_states(ind > 0)
      CALL mpi_barrier(mpi_comm_world,ierror)
      CALL select_eom_root(ind > 0, isel)
+     IF ( eom_sf > 0 ) CALL finish_eom_sf(ind > 0)
 
      eom_results(ii,1) = kf**2
      eom_sel(ii) = isel
@@ -230,10 +231,12 @@ SUBROUTINE compute_eom_states
         CALL deallocate_paeom
      end IF
      IF ( isel > 0 ) eom_results(ii,6) = eom_wts(isel)
-     DEALLOCATE( eom_eigs, eom_wts, eom_res )
+     IF ( isel > 0 .and. eom_sf > 0 ) eom_results(ii,6) = eom_str(isel)
+     DEALLOCATE( eom_eigs, eom_wts, eom_res, eom_str )
   end DO
 
   ! Print Results: kF^2, k^2, e_k, f_kk, omega_k, selected root, its 1p (1h) weight
+  ! (its strength s_i with eom_sf > 0)
   IF ( iam == 0 ) write(6,*) ' -- EOM Energy Band --'
   ii = 0
   DO ind = -4, 4
@@ -291,7 +294,7 @@ SUBROUTINE compute_paeom_states
   ! Split up PA-EOM vector
   CALL setup_proc_mappings_paeomvec
 
-  ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations) )
+  ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations), eom_str(eom_iterations) )
   CALL mem_register('paeom2', REAL(2 * eom_states * 4.d0, dp))
   CALL mem_register('paeom2', REAL(eom_states * 16.d0, dp))
   CALL mem_register('paeom2', REAL(eom_iterations * 16.d0, dp))
@@ -319,6 +322,7 @@ SUBROUTINE compute_paeom_states
   CALL compute_right_eom_states(.true.)
   CALL mpi_barrier(mpi_comm_world,ierror)
   CALL select_eom_root(.true., isel)
+  IF ( eom_sf > 0 ) CALL finish_eom_sf(.true.)
 
   ! Print selected state
   IF ( iam == 0 ) write(6,*) ' -- PA-EOM States --'
@@ -331,7 +335,7 @@ SUBROUTINE compute_paeom_states
           real(hbar1b_I2(i1,i2)), real(eom_eigs(isel)), eom_wts(isel)
   end IF
   IF ( iam == 0 ) write(6,*) ' -------------------'
-  DEALLOCATE( eom_eigs, eom_wts, eom_res )
+  DEALLOCATE( eom_eigs, eom_wts, eom_res, eom_str )
 
 end SUBROUTINE compute_paeom_states
 
@@ -378,7 +382,7 @@ SUBROUTINE compute_preom_states
   ! Split up PR-EOM vector
   CALL setup_proc_mappings_preomvec
 
-  ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations) )
+  ALLOCATE( eom_eigs(eom_iterations), eom_wts(eom_iterations), eom_res(eom_iterations), eom_str(eom_iterations) )
   CALL mem_register('preom2', REAL(2 * eom_states * 4.d0, dp))
   CALL mem_register('preom2', REAL(eom_states * 16.d0, dp))
   CALL mem_register('preom2', REAL(eom_iterations * 16.d0, dp))
@@ -406,6 +410,7 @@ SUBROUTINE compute_preom_states
   CALL compute_right_eom_states(.false.)
   CALL mpi_barrier(mpi_comm_world,ierror)
   CALL select_eom_root(.false., isel)
+  IF ( eom_sf > 0 ) CALL finish_eom_sf(.false.)
 
   ! Print selected state
   IF ( iam == 0 ) write(6,*) ' -- PR-EOM States --'
@@ -418,7 +423,7 @@ SUBROUTINE compute_preom_states
           real(hbar1b_I3(i1,i2)), -1.d0 * real(eom_eigs(isel)), eom_wts(isel)
   end IF
   IF ( iam == 0 ) write(6,*) ' -------------------'
-  DEALLOCATE( eom_eigs, eom_wts, eom_res )
+  DEALLOCATE( eom_eigs, eom_wts, eom_res, eom_str )
 
 end SUBROUTINE compute_preom_states
 
@@ -435,6 +440,13 @@ end SUBROUTINE compute_preom_states
 !              stable; the candidates are those roots.
 !  eom_qp = 1: start from the 1p (1h) state; stop when the Ritz pair with the largest
 !              weight has converged; the candidates are all converged Ritz pairs.
+! eom_sf > 0 overrides eom_qp: start from the 1p (1h) state v and give every Ritz pair its
+! strength s_i = Y(1,i) x(i), Y x = e1, from the eigenvectors Y of the Hessenberg matrix H_m.
+! The (theta_i, s_i) reproduce the moments <v|Hbar^k|v>, k < m, and sum to 1.
+!  eom_sf = 1 (sum): stop when the roots converged to res_tol hold sf_frac of the strength;
+!              the candidates are those roots.
+!  eom_sf = 2 (lit): stop when A(E) = -Im e1^T (E + i*eom_gamma - H_m)^-1 e1 / pi on a fixed
+!              grid changes by less than lit_tol (relative to its maximum).
 SUBROUTINE compute_right_eom_states(pa)
   USE parallel
   USE constants
@@ -460,6 +472,14 @@ SUBROUTINE compute_right_eom_states(pa)
   REAL(dp) :: rand1, vnorm
   REAL(dp), PARAMETER :: res_tol = 1.d-5    ! residual (MeV) of the target root, eom_qp = 1
   REAL(dp), PARAMETER :: report_tol = 1.d-3 ! residual (MeV) for reporting other roots
+  REAL(dp), PARAMETER :: sf_frac = 0.95d0   ! converged strength fraction, eom_sf = 1
+  REAL(dp), PARAMETER :: lit_tol = 1.d-6    ! relative change of A(E), eom_sf = 2
+  REAL(dp), PARAMETER :: lit_half = 250.d0  ! grid half-width (MeV) around <v|Hbar|v>, eom_sf = 2
+  COMPLEX(dpc), ALLOCATABLE :: str_temp(:), ymat(:,:), xvec(:)
+  INTEGER, ALLOCATABLE :: ipiv(:)
+  REAL(dp), ALLOCATABLE :: lit_old(:)
+  REAL(dp) :: sconv
+  INTEGER :: info, ig
 
   ! EOM parameters
   tolerance = 1.e-6
@@ -476,9 +496,16 @@ SUBROUTINE compute_right_eom_states(pa)
   vec_no = 0
   start_vector = 0.d0
 
+  IF ( eom_sf > 0 ) then
+     ALLOCATE( eom_ritz(eom_iterations), eom_ritz_s(eom_iterations), eom_ritz_res(eom_iterations) )
+     eom_ritz = 0.d0; eom_ritz_s = 0.d0; eom_ritz_res = 0.d0
+     eom_m = 0
+     eom_ngrid = 0
+  end IF
+
   ! Initialize EOM vec: the 1p (1h) state with both spins, or random
   DO ii = eom%my_start, eom%my_stop
-     IF ( eom_qp == 1 ) then
+     IF ( eom_qp == 1 .or. eom_sf > 0 ) then
         IF ( ii <= 2 ) start_vector(ii) = 1.d0
      else
         CALL random_number(rand1)
@@ -567,7 +594,78 @@ SUBROUTINE compute_right_eom_states(pa)
         res_temp(i) = abs( h_new(p+2,p+1)*vec_temp(iterations,i) )/vnorm
      end DO
 
-     IF ( eom_qp == 0 ) then
+     ! Ritz strengths s_i = Y(1,i) x(i) with Y x = e1 (start vector = first Krylov vector)
+     IF ( eom_sf > 0 ) then
+        ALLOCATE( str_temp(iterations), ymat(iterations,iterations), xvec(iterations), ipiv(iterations) )
+        ymat = vec_temp
+        xvec = 0.d0
+        xvec(1) = 1.d0
+        CALL zgesv(iterations, 1, ymat, iterations, ipiv, xvec, iterations, info)
+        DO i = 1, iterations
+           str_temp(i) = vec_temp(1,i)*xvec(i)
+        end DO
+        eom_m = iterations
+        eom_ritz(1:iterations) = eigs_temp
+        eom_ritz_s(1:iterations) = str_temp
+        eom_ritz_res(1:iterations) = res_temp
+        DEALLOCATE( ymat, xvec, ipiv )
+     end IF
+
+     IF ( eom_sf == 1 ) then
+        ! Spectral function from the converged states
+        eom_nfound = 0
+        sconv = 0.d0
+        DO i = 1, iterations
+           IF ( abs(eigs_temp(i)) < min_val ) cycle
+           IF ( res_temp(i) > res_tol ) cycle
+           sconv = sconv + real(str_temp(i))
+           eom_nfound = eom_nfound + 1
+           eom_eigs(eom_nfound) = eigs_temp(i)
+           eom_wts(eom_nfound)  = wts_temp(i)
+           eom_res(eom_nfound)  = res_temp(i)
+           eom_str(eom_nfound)  = real(str_temp(i))
+        end DO
+        sigma = sconv
+        IF ( iam == 0 ) write(6,'(a,i5,f12.6,i6)') ' Iterations, converged strength, roots: ', &
+             iterations, sconv, eom_nfound
+     else IF ( eom_sf == 2 ) then
+        ! Lorentzian-smoothed A(E) on a grid fixed at the first iteration
+        IF ( p == 0 ) then
+           eom_ngrid = 2*nint(lit_half/(0.25d0*eom_gamma)) + 1
+           ALLOCATE( eom_grid(eom_ngrid), eom_lit(eom_ngrid), lit_old(eom_ngrid) )
+           DO ig = 1, eom_ngrid
+              eom_grid(ig) = real(h_new(1,1)) - lit_half + (ig-1)*0.25d0*eom_gamma
+           end DO
+           lit_old = 0.d0
+        end IF
+        DO ig = 1, eom_ngrid
+           eom_lit(ig) = -aimag( sum( str_temp(:)/(cmplx(eom_grid(ig), eom_gamma, dpc) - eigs_temp(:)) ) )/pi
+        end DO
+        sigma = maxval( abs(eom_lit - lit_old) )/max( maxval(abs(eom_lit)), 1.d-300 )
+        lit_old = eom_lit
+
+        ! Candidates: every converged Ritz pair, plus the one with the largest strength
+        imax = 0
+        DO i = 1, iterations
+           IF ( abs(eigs_temp(i)) < min_val ) cycle
+           IF ( imax == 0 ) then
+              imax = i
+           else IF ( real(str_temp(i)) > real(str_temp(imax)) + 1.d-6 ) then
+              imax = i
+           end IF
+        end DO
+        eom_nfound = 0
+        DO i = 1, iterations
+           IF ( abs(eigs_temp(i)) < min_val ) cycle
+           IF ( res_temp(i) > report_tol .and. i /= imax ) cycle
+           eom_nfound = eom_nfound + 1
+           eom_eigs(eom_nfound) = eigs_temp(i)
+           eom_wts(eom_nfound)  = wts_temp(i)
+           eom_res(eom_nfound)  = res_temp(i)
+           eom_str(eom_nfound)  = real(str_temp(i))
+        end DO
+        IF ( iam == 0 ) write(6,'(a,i5,e12.4)') ' Iterations, relative change of A(E): ', iterations, sigma
+     else IF ( eom_qp == 0 ) then
         ! Keep the eom_states lowest non-zero roots
         nroots = 0
         e_temp = 0.d0
@@ -619,9 +717,16 @@ SUBROUTINE compute_right_eom_states(pa)
      end IF
      IF ( iam == 0 ) write(6,*)
      DEALLOCATE( vec_temp, eigs_temp, h_temp, wts_temp, res_temp )
+     IF ( ALLOCATED(str_temp) ) DEALLOCATE( str_temp )
 
      iterations = iterations + 1
-     IF ( eom_qp == 0 ) then
+     IF ( eom_sf == 1 ) then
+        selfconsistency = ( iterations == eom_iterations .or. sigma >= sf_frac ) .and. &
+             iterations > min(eom_iterations-1,12)
+     else IF ( eom_sf == 2 ) then
+        selfconsistency = ( iterations == eom_iterations .or. sigma < lit_tol ) .and. &
+             iterations > min(eom_iterations-1,12)
+     else IF ( eom_qp == 0 ) then
         selfconsistency = ( iterations == eom_iterations .or. abs(sigma) < tolerance ) .and. &
              iterations > min(eom_iterations-1,12)
      else
@@ -630,6 +735,13 @@ SUBROUTINE compute_right_eom_states(pa)
      end IF
      IF ( exhausted ) selfconsistency = .TRUE.
   end DO
+
+  ! Keep the Hessenberg matrix, with its last subdiagonal element, for the strength output
+  IF ( eom_sf > 0 ) then
+     ALLOCATE( eom_hess(eom_m+1, eom_m) )
+     eom_hess = h_new(1:eom_m+1, 1:eom_m)
+  end IF
+  IF ( ALLOCATED(lit_old) ) DEALLOCATE( lit_old )
 
   DEALLOCATE( vec_no )
   DEALLOCATE( h_new )
@@ -695,11 +807,14 @@ SUBROUTINE select_eom_root(pa, isel)
   INTEGER :: i
   REAL(dp) :: sgn
 
-  ! roots come in degenerate spin pairs, so ignore weight differences at the noise level
+  ! roots come in degenerate spin pairs, so ignore weight differences at the noise level;
+  ! with eom_sf > 0 select on the strength s_i instead of the right-vector weight
   isel = 0
   DO i = 1, eom_nfound
      IF ( isel == 0 ) then
         isel = i
+     else IF ( eom_sf > 0 ) then
+        IF ( eom_str(i) > eom_str(isel) + 1.d-6 ) isel = i
      else IF ( eom_wts(i) > eom_wts(isel) + 1.d-6 ) then
         isel = i
      end IF
@@ -707,7 +822,7 @@ SUBROUTINE select_eom_root(pa, isel)
 
   sgn = 1.d0
   IF ( .not. pa ) sgn = -1.d0
-  IF ( iam == 0 ) then
+  IF ( iam == 0 .and. eom_sf == 0 ) then
      IF ( pa ) write(6,*) ' -- PA-EOM roots: root, omega (re, im), 1p weight, residual --'
      IF ( .not. pa ) write(6,*) ' -- PR-EOM roots: root, omega (re, im), 1h weight, residual --'
      DO i = 1, eom_nfound
@@ -717,9 +832,121 @@ SUBROUTINE select_eom_root(pa, isel)
            write(6,'(i4,2x,2f16.8,f12.6,e12.4)') i, sgn*eom_eigs(i), eom_wts(i), eom_res(i)
         end IF
      end DO
+  else IF ( iam == 0 ) then
+     IF ( pa ) write(6,*) ' -- PA-EOM roots: root, omega (re, im), strength, 1p weight, residual --'
+     IF ( .not. pa ) write(6,*) ' -- PR-EOM roots: root, omega (re, im), strength, 1h weight, residual --'
+     DO i = 1, eom_nfound
+        IF ( i == isel ) then
+           write(6,'(i4,2x,2f16.8,2f12.6,e12.4,a)') i, sgn*eom_eigs(i), eom_str(i), eom_wts(i), eom_res(i), &
+                '   <- selected'
+        else
+           write(6,'(i4,2x,2f16.8,2f12.6,e12.4)') i, sgn*eom_eigs(i), eom_str(i), eom_wts(i), eom_res(i)
+        end IF
+     end DO
+     write(6,'(a,f12.6)') ' Strength in listed roots: ', sum(eom_str(1:eom_nfound))
   end IF
 
 end SUBROUTINE select_eom_root
+
+
+! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+! Strength-function output for the current target (eom_sf > 0), then free its arrays.
+! Prints the LIT peak and FWHM (eom_sf = 2, in omega: E for PA, -E for PR) and writes to
+! <cc_file>_sf.h5, created on the first call of the run. Datasets per target, tag = PA<n>/PR<n>:
+!  tag_info   (int)  m, nx, ny, nz, tz, eom_sf, eom_ngrid
+!  tag_params        eom_gamma, sign (+1 PA, -1 PR: omega = sign*E)
+!  tag_H_real/imag   Hessenberg matrix h(1:m+1,1:m) in E (Hbar eigenvalue) units
+!  tag_ritz          m x 5: Re E, Im E, Re s, Im s, residual
+!  tag_lit           ngrid x 2: E, A(E)   (eom_sf = 2)
+SUBROUTINE finish_eom_sf(pa)
+  USE parallel
+  USE constants
+  USE hdf5_wrapper
+  USE hdf5
+
+  IMPLICIT NONE
+  LOGICAL, INTENT(in) :: pa
+  INTEGER :: ind, ipk, il, ir, error
+  INTEGER(HID_T) :: file_id
+  INTEGER :: info(7)
+  REAL(dp) :: sgn, amax, wl, wr
+  REAL(dp), ALLOCATABLE :: buf(:,:)
+  CHARACTER(len=8) :: tag
+  CHARACTER(len=200) :: sf_file
+
+  sgn = 1.d0
+  IF ( .not. pa ) sgn = -1.d0
+  ind = add_n
+  IF ( add_n == 0 ) ind = add_p
+
+  ! LIT peak and full width at half maximum, by linear interpolation on the grid
+  IF ( iam == 0 .and. eom_sf == 2 ) then
+     ipk = maxloc(eom_lit, 1)
+     amax = eom_lit(ipk)
+     il = ipk
+     DO WHILE ( il > 1 .and. eom_lit(il) > 0.5d0*amax )
+        il = il - 1
+     end DO
+     ir = ipk
+     DO WHILE ( ir < eom_ngrid .and. eom_lit(ir) > 0.5d0*amax )
+        ir = ir + 1
+     end DO
+     wl = eom_grid(il)
+     IF ( eom_lit(il+1) /= eom_lit(il) ) wl = eom_grid(il) + (0.5d0*amax - eom_lit(il)) * &
+          (eom_grid(il+1) - eom_grid(il))/(eom_lit(il+1) - eom_lit(il))
+     wr = eom_grid(ir)
+     IF ( eom_lit(ir-1) /= eom_lit(ir) ) wr = eom_grid(ir-1) + (0.5d0*amax - eom_lit(ir-1)) * &
+          (eom_grid(ir) - eom_grid(ir-1))/(eom_lit(ir) - eom_lit(ir-1))
+     write(6,'(a,f8.3,a,3f16.8)') ' LIT (gamma =', eom_gamma, ' MeV) peak omega, height, FWHM: ', &
+          sgn*eom_grid(ipk), amax, abs(wr - wl)
+  end IF
+
+  IF ( iam == 0 ) then
+     sf_file = cc_file(1:len_trim(cc_file)-3) // '_sf.h5'
+     IF ( eom_sf_new ) then
+        CALL h5fcreate_f(trim(sf_file), H5F_ACC_TRUNC_F, file_id, error)
+        eom_sf_new = .FALSE.
+     else
+        CALL h5fopen_f(trim(sf_file), H5F_ACC_RDWR_F, file_id, error)
+     end IF
+     IF ( pa ) write(tag,'(a2,i1)') 'PA', abs(ind)
+     IF ( .not. pa ) write(tag,'(a2,i1)') 'PR', abs(ind)
+
+     info = 0
+     info(1) = eom_m
+     IF ( pa ) info(2:5) = (/ nx_paeom, ny_paeom, nz_paeom, tz_paeom /)
+     IF ( .not. pa ) info(2:5) = (/ nx_preom, ny_preom, nz_preom, tz_preom /)
+     info(6) = eom_sf
+     info(7) = eom_ngrid
+     error = write_integer_vector(file_id, info, trim(tag)//'_info')
+     error = write_double_vector(file_id, (/ eom_gamma, sgn /), trim(tag)//'_params')
+     error = write_double_matrix(file_id, real(eom_hess, dp), trim(tag)//'_H_real')
+     error = write_double_matrix(file_id, aimag(eom_hess), trim(tag)//'_H_imag')
+
+     ALLOCATE( buf(eom_m, 5) )
+     buf(:,1) = real(eom_ritz(1:eom_m))
+     buf(:,2) = aimag(eom_ritz(1:eom_m))
+     buf(:,3) = real(eom_ritz_s(1:eom_m))
+     buf(:,4) = aimag(eom_ritz_s(1:eom_m))
+     buf(:,5) = eom_ritz_res(1:eom_m)
+     error = write_double_matrix(file_id, buf, trim(tag)//'_ritz')
+     DEALLOCATE( buf )
+     IF ( eom_sf == 2 ) then
+        ALLOCATE( buf(eom_ngrid, 2) )
+        buf(:,1) = eom_grid
+        buf(:,2) = eom_lit
+        error = write_double_matrix(file_id, buf, trim(tag)//'_lit')
+        DEALLOCATE( buf )
+     end IF
+     CALL h5fclose_f(file_id, error)
+  end IF
+
+  DEALLOCATE( eom_hess, eom_ritz, eom_ritz_s, eom_ritz_res )
+  IF ( ALLOCATED(eom_grid) ) DEALLOCATE( eom_grid, eom_lit )
+
+end SUBROUTINE finish_eom_sf
 
 
 ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

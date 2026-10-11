@@ -77,6 +77,13 @@ MODULE constants
   COMPLEX(dpc), ALLOCATABLE, PUBLIC :: eom_eigs(:) ! candidate roots of the current target
   REAL(dp), ALLOCATABLE, PUBLIC :: eom_wts(:)      ! their 1p (1h) weights
   REAL(dp), ALLOCATABLE, PUBLIC :: eom_res(:)      ! and Arnoldi residuals
+  REAL(dp), ALLOCATABLE, PUBLIC :: eom_str(:)      ! and 1p (1h) strengths s_i (eom_sf > 0)
+  ! strength function (eom_sf > 0): final Arnoldi size m, Hessenberg h(1:m+1,1:m), all Ritz
+  ! values/strengths/residuals, and the Lorentzian-smoothed A(E) on a grid (eom_sf = 2)
+  INTEGER, PUBLIC :: eom_m, eom_ngrid
+  LOGICAL, PUBLIC :: eom_sf_new = .TRUE.           ! create the _sf.h5 file on first write
+  COMPLEX(dpc), ALLOCATABLE, PUBLIC :: eom_hess(:,:), eom_ritz(:), eom_ritz_s(:)
+  REAL(dp), ALLOCATABLE, PUBLIC :: eom_ritz_res(:), eom_grid(:), eom_lit(:)
   INTEGER, PUBLIC :: nx_paeom, ny_paeom, nz_paeom, tz_paeom
   INTEGER, PUBLIC :: nx_preom, ny_preom, nz_preom, tz_preom
   INTEGER(i8), PUBLIC :: eom_ndim2, eom_ndim3, eom_ndim
@@ -96,6 +103,8 @@ MODULE constants
   INTEGER, PUBLIC :: eom3_cut=1000             ;namelist /args/ eom3_cut
   INTEGER, PUBLIC :: eom_states=1              ;namelist /args/ eom_states
   INTEGER, PUBLIC :: eom_qp=0                  ;namelist /args/ eom_qp
+  INTEGER, PUBLIC :: eom_sf=0                  ;namelist /args/ eom_sf
+  REAL(dp), PUBLIC :: eom_gamma=2.d0           ;namelist /args/ eom_gamma
   INTEGER, PUBLIC :: pre_gs=0                  ;namelist /args/ pre_gs
   INTEGER, PUBLIC :: test=0                    ;namelist /args/ test
   INTEGER, PUBLIC :: debug_contracts_flag=1    ;namelist /args/ debug_contracts_flag
@@ -124,7 +133,10 @@ END MODULE one_body_operators
 
 MODULE diis_mod
   USE kind_params
-  INTEGER, PUBLIC :: n_diis, nn_diis, nstep, diis_step, diis_subspace 
+  INTEGER, PUBLIC :: n_diis, nn_diis, nstep, diis_step, diis_subspace
+  ! The history is distributed: this rank holds packed T2 entries diis_lo..diis_hi
+  INTEGER, PUBLIC :: diis_lo, diis_hi
+  INTEGER, PUBLIC, allocatable, dimension(:) :: diis_counts, diis_displs
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: t2_diis
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: t2_diisd
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: diis_mat

@@ -33,29 +33,32 @@ SUBROUTINE diis_t2(count)
   USE constants
   USE operator_storage
   USE diis_mod
-  
+  USE mem_tracker
+
   IMPLICIT NONE
-  INTEGER, INTENT(INOUT) :: count 
+  INTEGER, INTENT(INOUT) :: count
   INTEGER :: ch, bra, ket, bra_confs, ket_confs
   INTEGER :: i, j, k, i1
   INTEGER :: lwork, info
   REAL(dp) :: mix1, mix2
   COMPLEX(dpc) :: t2
   INTEGER, ALLOCATABLE :: ipiv(:)
-  COMPLEX(dpc), ALLOCATABLE :: work(:)
-  
+  COMPLEX(dpc), ALLOCATABLE :: work(:), buf(:)
+
   mix1 = cc_scale
   mix2 = 1.0_dp - cc_scale
-  
-  ! Shift history buffer if subspace is full
+
+  ! History: x_1..x_nstep (mixed T2 per step) is kept as x_nstep in t2_diis(:,1) plus the
+  ! error vectors e_i = x_(i+1) - x_i in t2_diisd(:,1:nstep-1). Drop e_1 if the subspace is full.
+  ! Each rank stores only its slice diis_lo..diis_hi of the packed T2 index.
   IF ( nstep > diis_subspace ) THEN
      nstep = diis_subspace
-     DO i = 1, diis_subspace-1 
-        t2_diis(:,i) = t2_diis(:,i+1)
+     DO i = 1, diis_subspace-2
+        t2_diisd(:,i) = t2_diisd(:,i+1)
      end DO
   END IF
-  
-  ! Store mixed T2 amplitudes into DIIS history
+
+  ! Mix, then store the new error vector and x_nstep
   i1 = 0
   DO ch = 1, channels_2b%number_confs
      IF ( number_2b(3,ch) == 0 ) cycle
@@ -67,7 +70,9 @@ SUBROUTINE diis_t2(count)
            i1 = i1 + 1
            t2 = t2_ccm(ch)%cval(bra,ket)
            t2_ccm(ch)%cval(bra,ket) = mix1*t2 + mix2*t2_ccm_eqn(ch)%cval(bra,ket)
-           t2_diis(i1,nstep) = t2_ccm(ch)%cval(bra,ket)
+           IF ( i1 < diis_lo .or. i1 > diis_hi ) cycle
+           IF ( nstep > 1 ) t2_diisd(i1,nstep-1) = t2_ccm(ch)%cval(bra,ket) - t2_diis(i1,1)
+           t2_diis(i1,1) = t2_ccm(ch)%cval(bra,ket)
         end DO
      end DO
   end DO
@@ -76,24 +81,18 @@ SUBROUTINE diis_t2(count)
   IF ( count == diis_step ) THEN
      count = 0
 
-     ! Build error vectors: difference of successive amplitudes
-     DO i = 1, nstep-1
-        DO k = 1, n_diis
-           t2_diisd(k,i) = t2_diis(k,i+1) - t2_diis(k,i)
-        end DO
-     end DO
-
      ! Build DIIS matrix: B(i,j) = <e_i|e_j>, with Lagrange constraint row/col
      ALLOCATE( diis_mat(nstep,nstep) )
      ALLOCATE( sol_vect(nstep) )
      diis_mat = 0.0_dp
      DO i = 1, nstep-1
         DO j = 1, nstep-1
-           DO k = 1, n_diis
+           DO k = diis_lo, diis_hi
               diis_mat(i,j) = diis_mat(i,j) + t2_diisd(k,i)*t2_diisd(k,j)
            end DO
         end DO
      end DO
+     CALL mpi_allreduce(mpi_in_place, diis_mat, nstep*nstep, mpi_complex16, mpi_sum, mpi_comm_world, ierror)
      DO i = 1, nstep-1
         diis_mat(i,nstep) = -1.0_dp
         diis_mat(nstep,i) = -1.0_dp
@@ -110,18 +109,23 @@ SUBROUTINE diis_t2(count)
 
      IF ( iam == 0 ) write(6,'(A29)') ' ...DIIS extrapolation...    '
      
-     ! Construct extrapolated amplitudes: T2 = sum_i c_i * T2_i
-     ! Use t2_diisd(:,1) as workspace
-     DO i1 = 1, n_diis
-        t2_diisd(i1,1) = sol_vect(1)*t2_diis(i1,1)
+     ! Extrapolate T2 = sum_(i<nstep) c_i x_i. With sum c_i = 1 this telescopes to
+     ! x_nstep - sum_j C_j e_j, C_j = c_1 + ... + c_j. Each rank does its slice of a
+     ! transient full-length buffer, then an allgatherv rebuilds the replicated t2_ccm.
+     DO j = 2, nstep-1
+        sol_vect(j) = sol_vect(j) + sol_vect(j-1)
      end DO
-     DO i = 2, nstep-1
-        DO i1 = 1, n_diis
-           t2_diisd(i1,1) = t2_diisd(i1,1) + sol_vect(i)*t2_diis(i1,i)
+     ALLOCATE( buf(n_diis) )
+     CALL mem_register('t2', REAL(n_diis,dp) * 16.0_dp)
+     DO k = diis_lo, diis_hi
+        t2 = t2_diis(k,1)
+        DO j = 1, nstep-1
+           t2 = t2 - sol_vect(j)*t2_diisd(k,j)
         end DO
+        buf(k) = t2
      end DO
-
-     ! Unpack extrapolated amplitudes back into t2_ccm
+     CALL mpi_allgatherv(mpi_in_place, 0, mpi_datatype_null, buf, diis_counts, diis_displs, &
+          mpi_complex16, mpi_comm_world, ierror)
      i1 = 0
      DO ch = 1, channels_2b%number_confs
         IF ( number_2b(3,ch) == 0 ) cycle
@@ -131,12 +135,13 @@ SUBROUTINE diis_t2(count)
         DO bra = 1, bra_confs
            DO ket = 1, ket_confs
               i1 = i1 + 1
-              t2_ccm(ch)%cval(bra,ket) = t2_diisd(i1,1)                     
+              t2_ccm(ch)%cval(bra,ket) = buf(i1)
            end DO
         end DO
      end DO
-     
-     DEALLOCATE( diis_mat, sol_vect, ipiv, work )
+
+     DEALLOCATE( diis_mat, sol_vect, ipiv, work, buf )
+     CALL mem_release('t2', REAL(n_diis,dp) * 16.0_dp)
   END IF
 
   IF ( test > 1 ) CALL build_tamp_test
@@ -154,7 +159,7 @@ SUBROUTINE diis_setup
   USE mem_tracker
 
   IMPLICIT NONE
-  INTEGER :: ch, i1, bra_confs, ket_confs
+  INTEGER :: ch, i1, bra_confs, ket_confs, r, nbase, nrem
 
   i1 = 0
   DO ch = 1, channels_2b%number_confs
@@ -167,24 +172,40 @@ SUBROUTINE diis_setup
   
   n_diis  = i1
   nn_diis = diis_subspace
-  ALLOCATE( t2_diis(n_diis, nn_diis+1) )
-  ALLOCATE( t2_diisd(n_diis, nn_diis) )
+
+  ! Split the packed T2 index into contiguous, near-equal slices, one per rank
+  ALLOCATE( diis_counts(0:num_procs-1), diis_displs(0:num_procs-1) )
+  nbase = n_diis / num_procs
+  nrem  = MOD(n_diis, num_procs)
+  DO r = 0, num_procs-1
+     diis_counts(r) = nbase
+     IF ( r < nrem ) diis_counts(r) = nbase + 1
+     diis_displs(r) = r*nbase + MIN(r, nrem)
+  end DO
+  diis_lo = diis_displs(iam) + 1
+  diis_hi = diis_displs(iam) + diis_counts(iam)
+
+  ALLOCATE( t2_diis(diis_lo:diis_hi, 1) )
+  ALLOCATE( t2_diisd(diis_lo:diis_hi, nn_diis-1) )
   t2_diis  = 0.0_dp
   t2_diisd = 0.0_dp
-  CALL mem_register('t2', REAL(2 * n_diis*(nn_diis+1.0_dp) * 16.0_dp, dp))
+  CALL mem_register('t2', REAL(diis_counts(iam),dp) * nn_diis * 16.0_dp)
 
-  IF ( iam == 0 ) write(6,'(A,I10,A,I4)') '  DIIS setup: n_diis =', n_diis, '  subspace =', nn_diis
+  IF ( iam == 0 ) write(6,'(A,I10,A,I4,A,I10)') '  DIIS setup: n_diis =', n_diis, '  subspace =', nn_diis, &
+       '  per rank <=', MAXVAL(diis_counts)
   
 end SUBROUTINE diis_setup
 
 
 SUBROUTINE diis_take_down
+  USE parallel
   USE constants
   USE diis_mod
   USE mem_tracker
 
-  IMPLICIT NONE  
+  IMPLICIT NONE
+  CALL mem_release('t2', REAL(diis_counts(iam),dp) * nn_diis * 16.0_dp)
   DEALLOCATE( t2_diis )
   DEALLOCATE( t2_diisd )
-  CALL mem_release('t2', REAL(2 * n_diis*(nn_diis+1.0_dp) * 16.0_dp, dp))
+  DEALLOCATE( diis_counts, diis_displs )
 end SUBROUTINE diis_take_down
