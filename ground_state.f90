@@ -585,6 +585,8 @@ SUBROUTINE t2_denom
   IMPLICIT NONE
   INTEGER :: ch, bra, ket, bra_confs, ket_confs
   INTEGER :: a,b,i,j
+  INTEGER(i8) :: npos
+  REAL(dp) :: dmin, dmax
   COMPLEX(dpc) :: denom
 
   CALL assert_built('t2',   't2_denom')
@@ -600,12 +602,16 @@ SUBROUTINE t2_denom
      CALL check_mpi(ierror, 't2_denom', 'allreduce')
   end DO
 
+  ! Diagnostic: smallest |Re D|, largest Re D (should be < 0), and count of Re D > 0
+  dmin = HUGE(1.0_dp)
+  dmax = -HUGE(1.0_dp)
+  npos = 0
   DO ch = 1, channels_2b%number_confs
      IF ( number_2b(3,ch) == 0 ) cycle
      IF ( number_2b(1,ch) == 0 ) cycle
      bra_confs = number_2b(3,ch)
      ket_confs = number_2b(1,ch)
-     
+
      DO bra = 1, bra_confs
         a = lookup_2b_configs(3,ch)%ival2(1,bra)
         b = lookup_2b_configs(3,ch)%ival2(2,bra)
@@ -614,12 +620,16 @@ SUBROUTINE t2_denom
            j = lookup_2b_configs(1,ch)%ival2(2,ket)
 
            denom = hbar1b_I3(i,i) + hbar1b_I3(j,j) - hbar1b_I2(a,a) - hbar1b_I2(b,b) - 2.d0*cc_level
+           dmin = MIN(dmin, ABS(REAL(denom)))
+           dmax = MAX(dmax, REAL(denom))
+           IF ( REAL(denom) > 0.0_dp ) npos = npos + 1
            t2_ccm_eqn(ch)%cval(bra,ket) = t2_ccm_eqn(ch)%cval(bra,ket)/denom
            ! IF ( abs(t2_ccm_eqn(ch)%cval(bra,ket)) > 1.e-6 ) write(6,*) 'T2: ', ch,bra,ket, t2_ccm_eqn(ch)%cval(bra,ket)
         end DO
      end DO
   end DO
-  
+  ! IF ( iam == 0 ) write(6,'(A,ES11.3,A,ES11.3,A,I12)') ' ...T2 denom: min|D| =', dmin, '  max D =', dmax, '  #D>0 =', npos
+
   IF ( test == 3 ) CALL build_t2_eqn_test
     
 END SUBROUTINE t2_denom
@@ -1032,6 +1042,8 @@ SUBROUTINE t3_denom
   INTEGER :: ch3, ch1,ch2, bra,ket, bra0,ket0
   INTEGER :: ket_confs, bra_min,bra_max
   INTEGER :: a,b,c, i,j,k, cind1,kind1
+  INTEGER(i8) :: npos
+  REAL(dp) :: dmin, dmax
   COMPLEX(dpc) :: denom
   COMPLEX(t3c), POINTER :: wk(:,:)
 
@@ -1039,6 +1051,11 @@ SUBROUTINE t3_denom
   CALL assert_built('hbar', 't3_denom')
 
   IF ( iam == 0 ) WRITE(6,*) "...Collecting T3..."
+
+  ! Diagnostic: smallest |Re D|, largest Re D (should be < 0), and count of Re D > 0
+  dmin = HUGE(1.0_dp)
+  dmax = -HUGE(1.0_dp)
+  npos = 0
 
   DO ch3 = ch3_min, ch3_max
      DO cind1 = climits_t3(ch3,1), climits_t3(ch3,2)
@@ -1063,7 +1080,8 @@ SUBROUTINE t3_denom
               end IF
            end IF
 
-           !$omp parallel default(shared) private(wk, bra, bra0, a, b, ket, ket0, i, j, denom)
+           !$omp parallel default(shared) private(wk, bra, bra0, a, b, ket, ket0, i, j, denom) &
+           !$omp reduction(min:dmin) reduction(max:dmax) reduction(+:npos)
            ! Each thread gets its own pointer descriptor via PRIVATE
            wk => t3_ccm(ch3)%val2(cind1,kind1)%cval
            !$omp do schedule(static)           
@@ -1078,13 +1096,12 @@ SUBROUTINE t3_denom
                  j    = lookup_2b_configs(1,ch2)%ival2(2,ket0)
                  IF ( i == k .or. j == k ) cycle
                  
-                 IF ( tnf_approx > 1 ) then
-                    denom = ( hbar1b_I3(i,i) + hbar1b_I3(j,j) + hbar1b_I3(k,k) &
-                         - hbar1b_I2(a,a) - hbar1b_I2(b,b) - hbar1b_I2(c,c) ) - 3.d0*cc_level
-                 ELSE
-                    denom = ( fock_mtx(i,i) + fock_mtx(j,j) + fock_mtx(k,k) &
-                         - fock_mtx(a,a) - fock_mtx(b,b) - fock_mtx(c,c) ) - 3.d0*cc_level
-                 end IF
+                 ! Dressed (Hbar) denominators for all tnf_approx; bare Fock ones fail to converge at low density
+                 denom = ( hbar1b_I3(i,i) + hbar1b_I3(j,j) + hbar1b_I3(k,k) &
+                      - hbar1b_I2(a,a) - hbar1b_I2(b,b) - hbar1b_I2(c,c) ) - 3.d0*cc_level
+                 dmin = MIN(dmin, ABS(REAL(denom)))
+                 dmax = MAX(dmax, REAL(denom))
+                 IF ( REAL(denom) > 0.0_dp ) npos = npos + 1
                  wk(bra,ket) = wk(bra,ket)/denom
               end DO
            end DO
@@ -1093,8 +1110,11 @@ SUBROUTINE t3_denom
         end DO
      end DO
   end DO
-  CALL mpi_barrier(mpi_comm_world,ierror)
-  
+  CALL mpi_allreduce(mpi_in_place, dmin, 1, mpi_real8, mpi_min, mpi_comm_world, ierror)
+  CALL mpi_allreduce(mpi_in_place, dmax, 1, mpi_real8, mpi_max, mpi_comm_world, ierror)
+  CALL mpi_allreduce(mpi_in_place, npos, 1, mpi_integer8, mpi_sum, mpi_comm_world, ierror)
+  ! IF ( iam == 0 ) write(6,'(A,ES11.3,A,ES11.3,A,I12)') ' ...T3 denom: min|D| =', dmin, '  max D =', dmax, '  #D>0 =', npos
+
   IF ( test == 3 ) CALL build_t3_eqn_test
   
 end SUBROUTINE t3_denom

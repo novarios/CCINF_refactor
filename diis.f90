@@ -98,7 +98,7 @@ SUBROUTINE diis_t2(count)
         diis_mat(nstep,i) = -1.0_dp
      end DO
      diis_mat(nstep,nstep) = 0.0_dp
-     
+
      ! Solve for DIIS coefficients
      sol_vect = 0.0_dp
      sol_vect(nstep) = -1.0_dp
@@ -108,7 +108,7 @@ SUBROUTINE diis_t2(count)
      CALL ZSYSV('U', nstep, 1, diis_mat, nstep, ipiv, sol_vect, nstep, work, lwork, info)
 
      IF ( iam == 0 ) write(6,'(A29)') ' ...DIIS extrapolation...    '
-     
+
      ! Extrapolate T2 = sum_(i<nstep) c_i x_i. With sum c_i = 1 this telescopes to
      ! x_nstep - sum_j C_j e_j, C_j = c_1 + ... + c_j. Each rank does its slice of a
      ! transient full-length buffer, then an allgatherv rebuilds the replicated t2_ccm.
@@ -124,6 +124,9 @@ SUBROUTINE diis_t2(count)
         end DO
         buf(k) = t2
      end DO
+     ! Restart the history from the extrapolated T2, so the next error vector is its residual
+     t2_diis(diis_lo:diis_hi,1) = buf(diis_lo:diis_hi)
+     nstep = 1
      CALL mpi_allgatherv(mpi_in_place, 0, mpi_datatype_null, buf, diis_counts, diis_displs, &
           mpi_complex16, mpi_comm_world, ierror)
      i1 = 0
