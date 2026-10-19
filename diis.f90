@@ -48,17 +48,18 @@ SUBROUTINE diis_t2(count)
   mix1 = cc_scale
   mix2 = 1.0_dp - cc_scale
 
-  ! History: x_1..x_nstep (mixed T2 per step) is kept as x_nstep in t2_diis(:,1) plus the
-  ! error vectors e_i = x_(i+1) - x_i in t2_diisd(:,1:nstep-1). Drop e_1 if the subspace is full.
+  ! History of the last nstep steps: the mixed output y_i in t2_diis(:,i) and its residual
+  ! r_i = y_i - (input T2 of step i) in t2_diisd(:,i). Drop step 1 if the subspace is full.
   ! Each rank stores only its slice diis_lo..diis_hi of the packed T2 index.
   IF ( nstep > diis_subspace ) THEN
      nstep = diis_subspace
-     DO i = 1, diis_subspace-2
+     DO i = 1, diis_subspace-1
+        t2_diis(:,i) = t2_diis(:,i+1)
         t2_diisd(:,i) = t2_diisd(:,i+1)
      end DO
   END IF
 
-  ! Mix, then store the new error vector and x_nstep
+  ! Mix, then store y_nstep and r_nstep
   i1 = 0
   DO ch = 1, channels_2b%number_confs
      IF ( number_2b(3,ch) == 0 ) cycle
@@ -71,62 +72,61 @@ SUBROUTINE diis_t2(count)
            t2 = t2_ccm(ch)%cval(bra,ket)
            t2_ccm(ch)%cval(bra,ket) = mix1*t2 + mix2*t2_ccm_eqn(ch)%cval(bra,ket)
            IF ( i1 < diis_lo .or. i1 > diis_hi ) cycle
-           IF ( nstep > 1 ) t2_diisd(i1,nstep-1) = t2_ccm(ch)%cval(bra,ket) - t2_diis(i1,1)
-           t2_diis(i1,1) = t2_ccm(ch)%cval(bra,ket)
+           t2_diis(i1,nstep) = t2_ccm(ch)%cval(bra,ket)
+           t2_diisd(i1,nstep) = t2_ccm(ch)%cval(bra,ket) - t2
         end DO
      end DO
   end DO
 
-  ! Perform DIIS extrapolation every diis_step iterations
-  IF ( count == diis_step ) THEN
+  ! Perform DIIS extrapolation every diis_step iterations, once there are 3 steps of history
+  IF ( count >= diis_step .and. nstep >= 3 ) THEN
      count = 0
 
-     ! Build DIIS matrix: B(i,j) = <e_i|e_j>, with Lagrange constraint row/col
-     ALLOCATE( diis_mat(nstep,nstep) )
-     ALLOCATE( sol_vect(nstep) )
+     ! Build DIIS matrix: B(i,j) = <r_i|r_j>, with Lagrange constraint row/col
+     ALLOCATE( diis_mat(nstep+1,nstep+1) )
+     ALLOCATE( sol_vect(nstep+1) )
      diis_mat = 0.0_dp
-     DO i = 1, nstep-1
-        DO j = 1, nstep-1
+     DO i = 1, nstep
+        DO j = 1, nstep
            DO k = diis_lo, diis_hi
               diis_mat(i,j) = diis_mat(i,j) + t2_diisd(k,i)*t2_diisd(k,j)
            end DO
         end DO
      end DO
-     CALL mpi_allreduce(mpi_in_place, diis_mat, nstep*nstep, mpi_complex16, mpi_sum, mpi_comm_world, ierror)
-     DO i = 1, nstep-1
-        diis_mat(i,nstep) = -1.0_dp
-        diis_mat(nstep,i) = -1.0_dp
+     CALL mpi_allreduce(mpi_in_place, diis_mat, (nstep+1)**2, mpi_complex16, mpi_sum, mpi_comm_world, ierror)
+     DO i = 1, nstep
+        diis_mat(i,nstep+1) = -1.0_dp
+        diis_mat(nstep+1,i) = -1.0_dp
      end DO
-     diis_mat(nstep,nstep) = 0.0_dp
+     diis_mat(nstep+1,nstep+1) = 0.0_dp
 
-     ! Solve for DIIS coefficients
+     ! Solve for DIIS coefficients; keep the mixed T2 if B is singular
      sol_vect = 0.0_dp
-     sol_vect(nstep) = -1.0_dp
-     ALLOCATE( ipiv(nstep) )
-     lwork = MAX(1, 2*nstep)
+     sol_vect(nstep+1) = -1.0_dp
+     ALLOCATE( ipiv(nstep+1) )
+     lwork = MAX(1, 2*(nstep+1))
      ALLOCATE( work(lwork) )
-     CALL ZSYSV('U', nstep, 1, diis_mat, nstep, ipiv, sol_vect, nstep, work, lwork, info)
+     CALL ZSYSV('U', nstep+1, 1, diis_mat, nstep+1, ipiv, sol_vect, nstep+1, work, lwork, info)
+     IF ( info /= 0 ) THEN
+        IF ( iam == 0 ) write(6,'(A,I4)') ' ...DIIS skipped, ZSYSV info =', info
+        DEALLOCATE( diis_mat, sol_vect, ipiv, work )
+        IF ( test > 1 ) CALL build_tamp_test
+        RETURN
+     END IF
 
      IF ( iam == 0 ) write(6,'(A29)') ' ...DIIS extrapolation...    '
 
-     ! Extrapolate T2 = sum_(i<nstep) c_i x_i. With sum c_i = 1 this telescopes to
-     ! x_nstep - sum_j C_j e_j, C_j = c_1 + ... + c_j. Each rank does its slice of a
-     ! transient full-length buffer, then an allgatherv rebuilds the replicated t2_ccm.
-     DO j = 2, nstep-1
-        sol_vect(j) = sol_vect(j) + sol_vect(j-1)
-     end DO
+     ! Extrapolate T2 = sum_i c_i y_i. Each rank does its slice of a transient
+     ! full-length buffer, then an allgatherv rebuilds the replicated t2_ccm.
      ALLOCATE( buf(n_diis) )
      CALL mem_register('t2', REAL(n_diis,dp) * 16.0_dp)
      DO k = diis_lo, diis_hi
-        t2 = t2_diis(k,1)
-        DO j = 1, nstep-1
-           t2 = t2 - sol_vect(j)*t2_diisd(k,j)
+        t2 = 0.0_dp
+        DO j = 1, nstep
+           t2 = t2 + sol_vect(j)*t2_diis(k,j)
         end DO
         buf(k) = t2
      end DO
-     ! Restart the history from the extrapolated T2, so the next error vector is its residual
-     t2_diis(diis_lo:diis_hi,1) = buf(diis_lo:diis_hi)
-     nstep = 1
      CALL mpi_allgatherv(mpi_in_place, 0, mpi_datatype_null, buf, diis_counts, diis_displs, &
           mpi_complex16, mpi_comm_world, ierror)
      i1 = 0
@@ -188,11 +188,11 @@ SUBROUTINE diis_setup
   diis_lo = diis_displs(iam) + 1
   diis_hi = diis_displs(iam) + diis_counts(iam)
 
-  ALLOCATE( t2_diis(diis_lo:diis_hi, 1) )
-  ALLOCATE( t2_diisd(diis_lo:diis_hi, nn_diis-1) )
+  ALLOCATE( t2_diis(diis_lo:diis_hi, nn_diis) )
+  ALLOCATE( t2_diisd(diis_lo:diis_hi, nn_diis) )
   t2_diis  = 0.0_dp
   t2_diisd = 0.0_dp
-  CALL mem_register('t2', REAL(diis_counts(iam),dp) * nn_diis * 16.0_dp)
+  CALL mem_register('t2', REAL(diis_counts(iam),dp) * 2 * nn_diis * 16.0_dp)
 
   IF ( iam == 0 ) write(6,'(A,I10,A,I4,A,I10)') '  DIIS setup: n_diis =', n_diis, '  subspace =', nn_diis, &
        '  per rank <=', MAXVAL(diis_counts)
@@ -207,7 +207,7 @@ SUBROUTINE diis_take_down
   USE mem_tracker
 
   IMPLICIT NONE
-  CALL mem_release('t2', REAL(diis_counts(iam),dp) * nn_diis * 16.0_dp)
+  CALL mem_release('t2', REAL(diis_counts(iam),dp) * 2 * nn_diis * 16.0_dp)
   DEALLOCATE( t2_diis )
   DEALLOCATE( t2_diisd )
   DEALLOCATE( diis_counts, diis_displs )

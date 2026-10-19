@@ -142,8 +142,9 @@ SUBROUTINE ccdt_iter
         sigma = 1000.d0
         selfconsistency = .FALSE.
         
+        ! Extrapolate every iteration: the T2 <-> T3 feedback can have slowly growing modes
         diis_subspace = 10
-        diis_step = 10
+        diis_step = 1
         CALL diis_take_down
         CALL diis_setup
         
