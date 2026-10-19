@@ -212,3 +212,188 @@ SUBROUTINE diis_take_down
   DEALLOCATE( t2_diisd )
   DEALLOCATE( diis_counts, diis_displs )
 end SUBROUTINE diis_take_down
+
+
+! Newton-Krylov helpers. Vectors are this rank's slice diis_lo..diis_hi of the packed
+! T2 index, with the same packing and slicing as the DIIS history (diis_setup first).
+
+! x <- slice of t2_ccm (mode 1), or of the residual t2_ccm_eqn - t2_ccm (mode 2)
+SUBROUTINE t2_slice(x, mode)
+  USE single_particle_orbits
+  USE configurations
+  USE constants
+  USE operator_storage
+  USE diis_mod
+
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: mode
+  COMPLEX(dpc), INTENT(OUT) :: x(diis_lo:diis_hi)
+  INTEGER :: ch, bra, ket, i1
+
+  i1 = 0
+  DO ch = 1, channels_2b%number_confs
+     IF ( number_2b(3,ch) == 0 ) cycle
+     IF ( number_2b(1,ch) == 0 ) cycle
+     DO bra = 1, number_2b(3,ch)
+        DO ket = 1, number_2b(1,ch)
+           i1 = i1 + 1
+           IF ( i1 < diis_lo .or. i1 > diis_hi ) cycle
+           IF ( mode == 1 ) then
+              x(i1) = t2_ccm(ch)%cval(bra,ket)
+           else
+              x(i1) = t2_ccm_eqn(ch)%cval(bra,ket) - t2_ccm(ch)%cval(bra,ket)
+           end IF
+        end DO
+     end DO
+  end DO
+
+end SUBROUTINE t2_slice
+
+
+! t2_ccm <- the full vector whose slices are x on each rank; recouples t2_ccm_cross
+SUBROUTINE t2_set(x)
+  USE parallel
+  USE single_particle_orbits
+  USE configurations
+  USE constants
+  USE operator_storage
+  USE diis_mod
+  USE mem_tracker
+
+  IMPLICIT NONE
+  COMPLEX(dpc), INTENT(IN) :: x(diis_lo:diis_hi)
+  INTEGER :: ch, bra, ket, i1
+  COMPLEX(dpc), ALLOCATABLE :: buf(:)
+
+  ALLOCATE( buf(n_diis) )
+  CALL mem_register('t2', REAL(n_diis,dp) * 16.0_dp)
+  buf(diis_lo:diis_hi) = x
+  CALL mpi_allgatherv(mpi_in_place, 0, mpi_datatype_null, buf, diis_counts, diis_displs, &
+       mpi_complex16, mpi_comm_world, ierror)
+  i1 = 0
+  DO ch = 1, channels_2b%number_confs
+     IF ( number_2b(3,ch) == 0 ) cycle
+     IF ( number_2b(1,ch) == 0 ) cycle
+     DO bra = 1, number_2b(3,ch)
+        DO ket = 1, number_2b(1,ch)
+           i1 = i1 + 1
+           t2_ccm(ch)%cval(bra,ket) = buf(i1)
+        end DO
+     end DO
+  end DO
+  DEALLOCATE( buf )
+  CALL mem_release('t2', REAL(n_diis,dp) * 16.0_dp)
+  CALL t2_cross_recouple
+
+end SUBROUTINE t2_set
+
+
+! d = <a|b> over the full vector (conjugate-linear in a)
+SUBROUTINE slice_dot(a, b, d)
+  USE parallel
+  USE constants
+  USE diis_mod
+
+  IMPLICIT NONE
+  COMPLEX(dpc), INTENT(IN) :: a(diis_lo:diis_hi), b(diis_lo:diis_hi)
+  COMPLEX(dpc), INTENT(OUT) :: d
+
+  d = SUM( CONJG(a)*b )
+  CALL mpi_allreduce(mpi_in_place, d, 1, mpi_complex16, mpi_sum, mpi_comm_world, ierror)
+
+end SUBROUTINE slice_dot
+
+
+! jv = J.v for F(T2) = g(T2) - T2, by a forward difference about x0 (F(x0) = f0, |x0| = xnorm,
+! |v| = 1). The step is about the square root of the single-precision T3 noise. Leaves t2_ccm
+! at x0 + eps.v; the caller restores it.
+SUBROUTINE cc_jv(x0, f0, xnorm, v, jv)
+  USE constants
+  USE diis_mod
+
+  IMPLICIT NONE
+  COMPLEX(dpc), INTENT(IN) :: x0(diis_lo:diis_hi), f0(diis_lo:diis_hi), v(diis_lo:diis_hi)
+  REAL(dp), INTENT(IN) :: xnorm
+  COMPLEX(dpc), INTENT(OUT) :: jv(diis_lo:diis_hi)
+  REAL(dp) :: eps, rnorm
+
+  eps = 3.d-4 * (1.d0 + xnorm)
+  jv = x0 + eps*v
+  CALL t2_set(jv)
+  CALL cc_residual(rnorm)
+  CALL t2_slice(jv, 2)
+  jv = (jv - f0) / eps
+
+end SUBROUTINE cc_jv
+
+
+! GMRES for the Newton step J.delta = -f0 at x0, stopped when the least-squares residual is
+! below eta.|f0| or after m_max products. nmv returns the number of J.v products used.
+! Leaves t2_ccm at the last probe point; the caller sets the next T2.
+SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, nmv)
+  USE parallel
+  USE constants
+  USE diis_mod
+  USE mem_tracker
+
+  IMPLICIT NONE
+  COMPLEX(dpc), INTENT(IN) :: x0(diis_lo:diis_hi), f0(diis_lo:diis_hi)
+  COMPLEX(dpc), INTENT(OUT) :: delta(diis_lo:diis_hi)
+  REAL(dp), INTENT(IN) :: eta
+  INTEGER, INTENT(IN) :: m_max
+  INTEGER, INTENT(OUT) :: nmv
+  INTEGER :: i, j, pass, info, lwork
+  REAL(dp) :: xnorm, beta, hn, resid
+  COMPLEX(dpc) :: d
+  COMPLEX(dpc), ALLOCATABLE :: vk(:,:), h(:,:), a(:,:), b(:), work(:)
+
+  ALLOCATE( vk(diis_lo:diis_hi, 0:m_max) )
+  CALL mem_register('t2', REAL(diis_counts(iam),dp) * (m_max+1) * 16.0_dp)
+  ALLOCATE( h(m_max+1, m_max), a(m_max+1, m_max), b(m_max+1) )
+  lwork = 64*(m_max+1)
+  ALLOCATE( work(lwork) )
+  h = 0.0_dp
+
+  CALL slice_dot(x0, x0, d)
+  xnorm = SQRT(REAL(d))
+  CALL slice_dot(f0, f0, d)
+  beta = SQRT(REAL(d))
+  vk(:,0) = -f0 / beta
+
+  b = 0.0_dp
+  nmv = 0
+  DO j = 1, m_max
+     CALL cc_jv(x0, f0, xnorm, vk(:,j-1), vk(:,j))
+     nmv = j
+     ! Arnoldi, modified Gram-Schmidt done twice
+     DO pass = 1, 2
+        DO i = 0, j-1
+           CALL slice_dot(vk(:,i), vk(:,j), d)
+           h(i+1,j) = h(i+1,j) + d
+           vk(:,j) = vk(:,j) - d*vk(:,i)
+        end DO
+     end DO
+     CALL slice_dot(vk(:,j), vk(:,j), d)
+     hn = SQRT(REAL(d))
+     h(j+1,j) = hn
+     IF ( hn > 1.d-14*beta ) vk(:,j) = vk(:,j) / hn
+
+     ! min | beta.e1 - H y | over the (j+1) x j Hessenberg matrix
+     a(1:j+1,1:j) = h(1:j+1,1:j)
+     b = 0.0_dp
+     b(1) = beta
+     CALL ZGELS('N', j+1, j, 1, a, m_max+1, b, m_max+1, work, lwork, info)
+     resid = ABS(b(j+1))
+     IF ( iam == 0 ) write(6,'(A,I4,A,ES11.3)') ' ...GMRES', j, '   |r|/|F| =', resid/beta
+     IF ( resid <= eta*beta .or. hn <= 1.d-14*beta ) EXIT
+  end DO
+
+  delta = 0.0_dp
+  DO i = 1, nmv
+     delta = delta + b(i)*vk(:,i-1)
+  end DO
+
+  DEALLOCATE( vk, h, a, b, work )
+  CALL mem_release('t2', REAL(diis_counts(iam),dp) * (m_max+1) * 16.0_dp)
+
+end SUBROUTINE cc_gmres

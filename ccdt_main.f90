@@ -150,7 +150,9 @@ PROGRAM ccdt
   end IF
   eom_add0 = add_n
   IF ( add_n == 0 ) eom_add0 = add_p
-  IF ( add_n == 100 .or. add_p == 100 ) then
+  IF ( .not. gs_converged ) then
+     IF ( iam == 0 .and. (add_n /= 0 .or. add_p /= 0) ) write(6,*) '...Skipping EOM: ground state not converged'
+  else IF ( add_n == 100 .or. add_p == 100 ) then
      CALL compute_eom_states
   else IF ( add_n > 0 .or. add_p > 0 ) then
      CALL compute_paeom_states

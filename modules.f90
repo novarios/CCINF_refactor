@@ -70,6 +70,7 @@ MODULE constants
   REAL(dp), PUBLIC :: kf, kf_n,kf_p, rho_n,rho_p
   COMPLEX(dpc) :: e0, ecorr2, ecorr3, ecorr, eccdt
   LOGICAL :: t3_switch, pre_gs0
+  LOGICAL :: gs_converged = .TRUE.
   INTEGER, DIMENSION(-1:1), PUBLIC :: NF2
   CHARACTER(len=80) :: cc_file0, interaction
   ! eom stuff

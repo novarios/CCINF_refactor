@@ -14,11 +14,7 @@ SUBROUTINE ccdt_iter
   USE mpi_check
   
   IMPLICIT NONE
-  INTEGER :: iterations, max_iterations, count
-  REAL(dp) :: sigma, tolerance
   COMPLEX(dpc) :: e1, e2, e3
-  REAL(dp) :: startwtime, endwtime
-  LOGICAL :: selfconsistency
 
   ! Preconditions: basis, channels, mappings, interactions, and Fock must be built.
   CALL assert_built('basis',        'ccdt_iter')
@@ -66,66 +62,15 @@ SUBROUTINE ccdt_iter
      IF ( iam == 0 ) write(6,*)
      
   ELSE
-     ! Here is the main iteration loop
-     max_iterations = 100
-     tolerance = 1.e-7
-     IF ( cc_approx > 1 ) tolerance = 1.e-5
+     ! Solve the CCD, then the CCDT, equations by Newton-Krylov
      cc_level = 0.d0
      cc_scale = 0.25d0
-     sigma = 1000.d0
-     selfconsistency = .FALSE.
-
-     IF ( iam == 0 ) THEN
-        write(6,*)
-        write(6,*) '=== CCD Iterations ==='
-        write(6,*) '  Max iterations:        ', max_iterations
-        write(6,*) '  Convergence tolerance: ', tolerance
-        write(6,*)
-     END IF
-     
      CALL cc_energy(e1, .true.)
-     
-     count = 0
-     nstep = 0
-     iterations = 1
-     t3_switch = .FALSE.
      e3 = 0.d0
 
-     DO WHILE ( .not.selfconsistency .and. iterations <= max_iterations-1 )
-
-        startwtime = MPI_WTIME()
-        CALL build_hbar_t2_iter
-        endwtime = MPI_WTIME()
-        IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...Hbar Build...        ', endwtime - startwtime, ' sec.'
-
-        startwtime = MPI_WTIME()
-        CALL t2_eqn
-        CALL t2_denom
-        endwtime = MPI_WTIME()
-        IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T2 Build...          ', endwtime - startwtime, ' sec.'
-        
-        count = count + 1
-        nstep = nstep + 1
-        ! CALL linear_t2
-        CALL diis_t2(count)
-        CALL t2_cross_recouple
-        CALL cc_energy(e2, .false.)
-        eccdt = e2
-        sigma = abs(e1 - e2)
-        e1 = e2
-
-        IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
-             ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
-        IF ( iam == 0 ) write(6,*)
-        
-        iterations = iterations + 1
-        IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
-             iterations > min(max_iterations-1,10) )  then
-           selfconsistency = .TRUE.
-        ELSE
-           selfconsistency = .FALSE.
-        end IF
-     end DO
+     t3_switch = .FALSE.
+     CALL cc_newton('CCD', e2)
+     eccdt = e2
 
      IF ( cc_approx > 0 ) then
         IF ( iam == 0 ) write(6,*)
@@ -133,77 +78,17 @@ SUBROUTINE ccdt_iter
         IF ( iam == 0 ) write(6,'(A,F16.10,A)') '  CCD Energy/A = ', REAL(eccdt)/below_ef, ' MeV'
         IF ( iam == 0 ) write(6,*)
      end IF
-     
+
      IF ( cc_approx > 1 ) then
-        max_iterations = 100
-        tolerance = 1.e-6
-        cc_level = 0.d0
-        cc_scale = 0.25d0
-        sigma = 1000.d0
-        selfconsistency = .FALSE.
-        
-        ! Extrapolate every iteration: the T2 <-> T3 feedback can have slowly growing modes
+        ! Fresh DIIS history for the polishing iterations
         diis_subspace = 10
         diis_step = 1
         CALL diis_take_down
         CALL diis_setup
-        
-        count = 0
-        nstep = 0
-        iterations = 1
+
         t3_switch = .TRUE.
-
-        IF ( iam == 0 ) THEN
-           write(6,*)
-           write(6,*) '=== CCDT Iterations ==='
-           write(6,*) '  Max iterations:        ', max_iterations
-           write(6,*) '  Convergence tolerance: ', tolerance
-           write(6,*)
-        END IF
-
-        DO WHILE ( .not.selfconsistency .and. iterations <= max_iterations-1 )
-
-           startwtime = MPI_WTIME()
-           CALL t3_eqn
-           CALL t3_denom
-           endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T3 Build...          ', endwtime - startwtime, ' sec.'
-                      
-           startwtime = MPI_WTIME()
-           CALL build_hbar_t2_iter
-           endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...Hbar Build...        ', endwtime - startwtime, ' sec.'
-           
-           startwtime = MPI_WTIME()
-           CALL t2_eqn
-           CALL t2_t3_eqn
-           CALL t2_denom
-           endwtime = MPI_WTIME()
-           IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T2 Build...          ', endwtime - startwtime, ' sec.'
-           
-           count = count + 1
-           nstep = nstep + 1
-           ! CALL linear_t2
-           CALL diis_t2(count)
-           CALL t2_cross_recouple
-           CALL cc_energy(e2, .false.)
-           eccdt = e2
-           sigma = abs(e1 - e2)
-           e1 = e2
-           ! IF ( tnf_switch ) CALL cc_energy_3b(e3) ! only for testing
-
-           IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3)') &
-                ' ...Iteration ', iterations, '   E/A =', REAL(e2)/below_ef, '   dE = ', sigma
-           IF ( iam == 0 ) write(6,*)
-           
-           iterations = iterations + 1
-           IF ( ( iterations == max_iterations .or. abs(sigma) < tolerance ) .and. &
-                iterations > min(max_iterations-1,10) )  then
-              selfconsistency = .TRUE. 
-           ELSE
-              selfconsistency = .FALSE.
-           end IF
-        end DO
+        CALL cc_newton('CCDT', e2)
+        eccdt = e2
         IF ( cc_approx > 1 .and. tnf_approx > 1 ) then
            CALL cc_energy_3b(e3, .true.)
            eccdt = e3
@@ -245,6 +130,172 @@ SUBROUTINE ccdt_iter
   END IF
   
 END SUBROUTINE ccdt_iter
+
+
+! Solve F(T2) = g(T2) - T2 = 0 from the current T2 (T3 too when t3_switch) by Newton-Krylov:
+! GMRES for J.dx = -F, then T2 <- T2 + alpha.dx with alpha halved until max|F| drops (a damped
+! Jacobi step if it never does). Converged when max|F| < res_tol; then n_polish ordinary
+! mixed/DIIS iterations. Returns the CC energy of the final T2.
+SUBROUTINE cc_newton(label, energy)
+  USE parallel
+  USE constants
+  USE diis_mod
+
+  IMPLICIT NONE
+  CHARACTER(len=*), INTENT(IN) :: label
+  COMPLEX(dpc), INTENT(OUT) :: energy
+  INTEGER, PARAMETER :: max_newton = 30, m_max = 20, max_halve = 4, n_polish = 3
+  REAL(dp), PARAMETER :: res_tol = 1.d-8, eta = 1.d-2
+  INTEGER :: it, k, nmv, nres, count
+  REAL(dp) :: rnorm, rtrial, alpha
+  COMPLEX(dpc) :: e1, e2
+  LOGICAL :: converged
+  CHARACTER(len=6) :: step
+  COMPLEX(dpc), ALLOCATABLE :: x(:), f(:), dx(:), xt(:)
+
+  IF ( iam == 0 ) then
+     write(6,*)
+     write(6,*) '=== ', label, ' Newton-Krylov ==='
+     write(6,'(A,I4,A,ES9.2,A,I4)') '   Max Newton steps:', max_newton, '   residual tol:', res_tol, &
+          '   GMRES max:', m_max
+     write(6,*)
+  end IF
+
+  ALLOCATE( x(diis_lo:diis_hi), f(diis_lo:diis_hi), dx(diis_lo:diis_hi), xt(diis_lo:diis_hi) )
+  CALL t2_slice(x, 1)
+  CALL cc_residual(rnorm)
+  CALL t2_slice(f, 2)
+  CALL cc_energy(e1, .false.)
+  nres = 1
+  IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A9,ES11.3)') &
+       ' ...Newton    ', 0, '   E/A =', REAL(e1)/below_ef, '   res = ', rnorm
+
+  it = 0
+  converged = ( rnorm < res_tol )
+  DO WHILE ( .not. converged .and. it < max_newton )
+     it = it + 1
+     CALL cc_gmres(x, f, dx, eta, m_max, nmv)
+     nres = nres + nmv
+
+     ! Backtracking on max|F|
+     step = 'Newton'
+     alpha = 1.d0
+     DO k = 0, max_halve
+        xt = x + alpha*dx
+        CALL t2_set(xt)
+        CALL cc_residual(rtrial)
+        nres = nres + 1
+        IF ( rtrial < rnorm ) EXIT
+        alpha = 0.5d0*alpha
+     end DO
+     IF ( rtrial >= rnorm ) then
+        step = 'Jacobi'
+        alpha = 1.d0 - cc_scale
+        xt = x + alpha*f
+        CALL t2_set(xt)
+        CALL cc_residual(rtrial)
+        nres = nres + 1
+     end IF
+
+     x = xt
+     CALL t2_slice(f, 2)
+     rnorm = rtrial
+     CALL cc_energy(e2, .false.)
+     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3,A3,A6,A8,F6.3,A8,I3)') &
+          ' ...Newton    ', it, '   E/A =', REAL(e2)/below_ef, '   dE = ', ABS(e2-e1), '   res = ', rnorm, &
+          '   ', step, '  alpha', alpha, '   J.v =', nmv
+     IF ( iam == 0 ) write(6,*)
+     e1 = e2
+     converged = ( rnorm < res_tol )
+  end DO
+  DEALLOCATE( x, f, dx, xt )
+
+  ! A few ordinary iterations; t2_ccm_eqn already holds g(t2_ccm)
+  count = 0
+  nstep = 0
+  DO k = 1, n_polish
+     count = count + 1
+     nstep = nstep + 1
+     CALL diis_t2(count)
+     CALL t2_cross_recouple
+     CALL cc_energy(e2, .false.)
+     CALL cc_residual(rnorm)
+     nres = nres + 1
+     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3)') &
+          ' ...Polish    ', k, '   E/A =', REAL(e2)/below_ef, '   dE = ', ABS(e2-e1), '   res = ', rnorm
+     e1 = e2
+  end DO
+  energy = e2
+  IF ( iam == 0 ) write(6,'(A,A,A,I4,A,I5)') '  ', label, ' Newton steps:', it, '   residual evaluations:', nres
+
+  CALL check_gs_converged(converged, label)
+
+end SUBROUTINE cc_newton
+
+
+! One evaluation of the CC equations at the current T2: t2_ccm_eqn = g(t2_ccm), the next
+! Jacobi iterate (T3 too when t3_switch). Hbar is built first, so g depends only on t2_ccm
+! (and t2_ccm_cross, which must match it). rnorm = max |g - t2|, the residual.
+SUBROUTINE cc_residual(rnorm)
+  USE parallel
+  USE constants
+  USE configurations
+  USE operator_storage
+
+  IMPLICIT NONE
+  REAL(dp), INTENT(OUT) :: rnorm
+  INTEGER :: ch
+  REAL(dp) :: startwtime, endwtime
+
+  startwtime = MPI_WTIME()
+  CALL build_hbar_t2_iter
+  endwtime = MPI_WTIME()
+  IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...Hbar Build...        ', endwtime - startwtime, ' sec.'
+
+  IF ( t3_switch ) then
+     startwtime = MPI_WTIME()
+     CALL t3_eqn
+     CALL t3_denom
+     endwtime = MPI_WTIME()
+     IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T3 Build...          ', endwtime - startwtime, ' sec.'
+  end IF
+
+  startwtime = MPI_WTIME()
+  CALL t2_eqn
+  IF ( t3_switch ) CALL t2_t3_eqn
+  CALL t2_denom
+  endwtime = MPI_WTIME()
+  IF ( iam == 0 ) write(6,'(A25,F12.2,A9)') ' ...T2 Build...          ', endwtime - startwtime, ' sec.'
+
+  ! t2_ccm and t2_ccm_eqn are replicated, so every rank gets the same norm
+  rnorm = 0.0_dp
+  DO ch = 1, channels_2b%number_confs
+     IF ( number_2b(3,ch) == 0 ) cycle
+     IF ( number_2b(1,ch) == 0 ) cycle
+     rnorm = MAX(rnorm, MAXVAL(ABS(t2_ccm_eqn(ch)%cval - t2_ccm(ch)%cval)))
+  end DO
+
+end SUBROUTINE cc_residual
+
+
+! Flag and report a ground state that stopped at max_iterations; the EOM is skipped.
+SUBROUTINE check_gs_converged(converged, label)
+  USE parallel
+  USE constants
+
+  IMPLICIT NONE
+  LOGICAL, INTENT(IN) :: converged
+  CHARACTER(len=*), INTENT(IN) :: label
+
+  IF ( converged ) RETURN
+  gs_converged = .FALSE.
+  IF ( iam == 0 ) then
+     write(6,*)
+     write(6,*) '!!! WARNING: ', label, ' NOT CONVERGED at max iterations; EOM will be skipped !!!'
+     write(6,*)
+  end IF
+
+end SUBROUTINE check_gs_converged
 
 
 
