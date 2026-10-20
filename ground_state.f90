@@ -133,9 +133,10 @@ END SUBROUTINE ccdt_iter
 
 
 ! Solve F(T2) = g(T2) - T2 = 0 from the current T2 (T3 too when t3_switch) by Newton-Krylov:
-! GMRES for J.dx = -F, then T2 <- T2 + alpha.dx with alpha halved until max|F| drops (a damped
-! Jacobi step if it never does). Converged when max|F| < res_tol; then n_polish ordinary
-! mixed/DIIS iterations. Returns the CC energy of the final T2.
+! GMRES for J.dx = -F, then T2 <- T2 + alpha.dx with alpha halved until |F|_2 drops enough
+! (a damped Jacobi step if it never does). |F|_2 is what GMRES reduces, so it is the line-search
+! merit; convergence is max|F| < res_tol. Then n_polish ordinary mixed/DIIS iterations.
+! Returns the CC energy of the final T2.
 SUBROUTINE cc_newton(label, energy)
   USE parallel
   USE constants
@@ -147,11 +148,11 @@ SUBROUTINE cc_newton(label, energy)
   INTEGER, PARAMETER :: max_newton = 30, m_max = 20, max_halve = 4, n_polish = 3
   REAL(dp), PARAMETER :: res_tol = 1.d-8, eta = 1.d-2
   INTEGER :: it, k, nmv, nres, count
-  REAL(dp) :: rnorm, rtrial, alpha
-  COMPLEX(dpc) :: e1, e2
-  LOGICAL :: converged
+  REAL(dp) :: rnorm, rtrial, alpha, fn, fnt
+  COMPLEX(dpc) :: e1, e2, d
+  LOGICAL :: converged, accepted
   CHARACTER(len=6) :: step
-  COMPLEX(dpc), ALLOCATABLE :: x(:), f(:), dx(:), xt(:)
+  COMPLEX(dpc), ALLOCATABLE :: x(:), f(:), dx(:), xt(:), ft(:)
 
   IF ( iam == 0 ) then
      write(6,*)
@@ -161,54 +162,69 @@ SUBROUTINE cc_newton(label, energy)
      write(6,*)
   end IF
 
-  ALLOCATE( x(diis_lo:diis_hi), f(diis_lo:diis_hi), dx(diis_lo:diis_hi), xt(diis_lo:diis_hi) )
+  ALLOCATE( x(diis_lo:diis_hi), f(diis_lo:diis_hi), dx(diis_lo:diis_hi), xt(diis_lo:diis_hi), &
+       ft(diis_lo:diis_hi) )
   CALL t2_slice(x, 1)
   CALL cc_residual(rnorm)
   CALL t2_slice(f, 2)
+  CALL slice_dot(f, f, d)
+  fn = SQRT(REAL(d))
   CALL cc_energy(e1, .false.)
   nres = 1
-  IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A9,ES11.3)') &
-       ' ...Newton    ', 0, '   E/A =', REAL(e1)/below_ef, '   res = ', rnorm
+  IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A9,ES11.3,A9,ES11.3)') &
+       ' ...Newton    ', 0, '   E/A =', REAL(e1)/below_ef, '   res = ', rnorm, '   |F| = ', fn
 
   it = 0
   converged = ( rnorm < res_tol )
   DO WHILE ( .not. converged .and. it < max_newton )
      it = it + 1
-     CALL cc_gmres(x, f, dx, eta, m_max, nmv)
+     CALL cc_gmres(x, f, dx, eta, m_max, it, nmv)
      nres = nres + nmv
 
-     ! Backtracking on max|F|
+     ! Backtracking on |F|_2 with a sufficient-decrease test
      step = 'Newton'
      alpha = 1.d0
      DO k = 0, max_halve
         xt = x + alpha*dx
         CALL t2_set(xt)
         CALL cc_residual(rtrial)
+        CALL t2_slice(ft, 2)
+        CALL slice_dot(ft, ft, d)
+        fnt = SQRT(REAL(d))
         nres = nres + 1
-        IF ( rtrial < rnorm ) EXIT
+        accepted = ( fnt <= (1.d0 - 1.d-4*alpha)*fn )
+        IF ( iam == 0 ) write(6,'(A,I4,A,F8.5,A,ES11.3,A,ES11.3,A,L2)') ' ...Line search step', it, &
+             '   alpha', alpha, '   |F| =', fnt, '   res =', rtrial, '   accepted', accepted
+        IF ( accepted ) EXIT
         alpha = 0.5d0*alpha
      end DO
-     IF ( rtrial >= rnorm ) then
+     IF ( .not. accepted ) then
         step = 'Jacobi'
         alpha = 1.d0 - cc_scale
         xt = x + alpha*f
         CALL t2_set(xt)
         CALL cc_residual(rtrial)
+        CALL t2_slice(ft, 2)
+        CALL slice_dot(ft, ft, d)
+        fnt = SQRT(REAL(d))
         nres = nres + 1
+        IF ( iam == 0 ) write(6,'(A,I4,A,F8.5,A,ES11.3,A,ES11.3)') ' ...Jacobi      step', it, &
+             '   alpha', alpha, '   |F| =', fnt, '   res =', rtrial
      end IF
 
      x = xt
-     CALL t2_slice(f, 2)
+     f = ft
+     fn = fnt
      rnorm = rtrial
      CALL cc_energy(e2, .false.)
-     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3,A3,A6,A8,F6.3,A8,I3)') &
+     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3,A9,ES11.3,A3,A6,A8,F7.4,A8,I3)') &
           ' ...Newton    ', it, '   E/A =', REAL(e2)/below_ef, '   dE = ', ABS(e2-e1), '   res = ', rnorm, &
-          '   ', step, '  alpha', alpha, '   J.v =', nmv
+          '   |F| = ', fn, '   ', step, '  alpha', alpha, '   J.v =', nmv
      IF ( iam == 0 ) write(6,*)
      e1 = e2
      converged = ( rnorm < res_tol )
   end DO
-  DEALLOCATE( x, f, dx, xt )
+  DEALLOCATE( x, f, dx, xt, ft )
 
   ! A few ordinary iterations; t2_ccm_eqn already holds g(t2_ccm)
   count = 0

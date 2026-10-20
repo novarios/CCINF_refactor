@@ -328,9 +328,9 @@ end SUBROUTINE cc_jv
 
 
 ! GMRES for the Newton step J.delta = -f0 at x0, stopped when the least-squares residual is
-! below eta.|f0| or after m_max products. nmv returns the number of J.v products used.
-! Leaves t2_ccm at the last probe point; the caller sets the next T2.
-SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, nmv)
+! below eta.|f0| or after m_max products. nmv returns the number of J.v products used; it is
+! the Newton step number, for the printout. Leaves t2_ccm at the last probe point.
+SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, it, nmv)
   USE parallel
   USE constants
   USE diis_mod
@@ -340,7 +340,7 @@ SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, nmv)
   COMPLEX(dpc), INTENT(IN) :: x0(diis_lo:diis_hi), f0(diis_lo:diis_hi)
   COMPLEX(dpc), INTENT(OUT) :: delta(diis_lo:diis_hi)
   REAL(dp), INTENT(IN) :: eta
-  INTEGER, INTENT(IN) :: m_max
+  INTEGER, INTENT(IN) :: m_max, it
   INTEGER, INTENT(OUT) :: nmv
   INTEGER :: i, j, pass, info, lwork
   REAL(dp) :: xnorm, beta, hn, resid
@@ -384,7 +384,7 @@ SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, nmv)
      b(1) = beta
      CALL ZGELS('N', j+1, j, 1, a, m_max+1, b, m_max+1, work, lwork, info)
      resid = ABS(b(j+1))
-     IF ( iam == 0 ) write(6,'(A,I4,A,ES11.3)') ' ...GMRES', j, '   |r|/|F| =', resid/beta
+     IF ( iam == 0 ) write(6,'(A,I4,A,I4,A,ES11.3)') ' ...GMRES        step', it, '   j', j, '   |r|/|F| =', resid/beta
      IF ( resid <= eta*beta .or. hn <= 1.d-14*beta ) EXIT
   end DO
 
