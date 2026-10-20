@@ -15,6 +15,8 @@ SUBROUTINE ccdt_iter
   
   IMPLICIT NONE
   COMPLEX(dpc) :: e1, e2, e3
+  INTEGER :: k
+  CHARACTER(len=24) :: label
 
   ! Preconditions: basis, channels, mappings, interactions, and Fock must be built.
   CALL assert_built('basis',        'ccdt_iter')
@@ -69,7 +71,7 @@ SUBROUTINE ccdt_iter
      e3 = 0.d0
 
      t3_switch = .FALSE.
-     CALL cc_newton('CCD', e2)
+     CALL cc_newton('CCD', e2, .FALSE.)
      eccdt = e2
 
      IF ( cc_approx > 0 ) then
@@ -87,7 +89,15 @@ SUBROUTINE ccdt_iter
         CALL diis_setup
 
         t3_switch = .TRUE.
-        CALL cc_newton('CCDT', e2)
+        ! t3_ramp: converge loosely with T3 zeroed above each lower cut, then the full t3_cut
+        DO k = 1, SIZE(t3_ramp)
+           IF ( t3_ramp(k) <= 0 .or. t3_ramp(k) >= t3_cut ) cycle
+           t3_stage = t3_ramp(k)
+           write(label,'(A,I0)') 'CCDT t3_cut ', t3_stage
+           CALL cc_newton(trim(label), e2, .TRUE.)
+        end DO
+        t3_stage = t3_cut
+        CALL cc_newton('CCDT', e2, .FALSE.)
         eccdt = e2
         IF ( cc_approx > 1 .and. tnf_approx > 1 ) then
            CALL cc_energy_3b(e3, .true.)
@@ -138,7 +148,9 @@ END SUBROUTINE ccdt_iter
 ! and grows or shrinks the radius; a rejected step shrinks it and is re-solved without new J.v.
 ! After max_try rejections, a damped Jacobi step. Converged when max|F| < res_tol; then n_polish
 ! ordinary mixed/DIIS iterations. Returns the CC energy of the final T2.
-SUBROUTINE cc_newton(label, energy)
+! stage: a t3_ramp stage, only a starting point for the next one: loose tolerance, fewer steps,
+! no polishing and no convergence flag.
+SUBROUTINE cc_newton(label, energy, stage)
   USE parallel
   USE constants
   USE diis_mod
@@ -146,14 +158,26 @@ SUBROUTINE cc_newton(label, energy)
   IMPLICIT NONE
   CHARACTER(len=*), INTENT(IN) :: label
   COMPLEX(dpc), INTENT(OUT) :: energy
-  INTEGER, PARAMETER :: max_newton = 30, m_max = 20, max_try = 5, n_polish = 3
-  REAL(dp), PARAMETER :: res_tol = 1.d-8, eta = 1.d-2
+  LOGICAL, INTENT(IN) :: stage
+  INTEGER, PARAMETER :: m_max = 20, max_try = 5
+  REAL(dp), PARAMETER :: eta = 1.d-2
+  INTEGER :: max_newton, n_polish
+  REAL(dp) :: res_tol
   INTEGER :: it, k, nmv, nres, count
   REAL(dp) :: rnorm, rtrial, fn, fnt, radius, dxn, pred, ratio
   COMPLEX(dpc) :: e1, e2, d
   LOGICAL :: converged, accepted
   CHARACTER(len=6) :: step
   COMPLEX(dpc), ALLOCATABLE :: x(:), f(:), dx(:), xt(:), ft(:)
+
+  max_newton = 30
+  n_polish = 3
+  res_tol = 1.d-8
+  IF ( stage ) then
+     max_newton = 10
+     n_polish = 0
+     res_tol = 1.d-5
+  end IF
 
   IF ( iam == 0 ) then
      write(6,*)
@@ -250,10 +274,10 @@ SUBROUTINE cc_newton(label, energy)
           ' ...Polish    ', k, '   E/A =', REAL(e2)/below_ef, '   dE = ', ABS(e2-e1), '   res = ', rnorm
      e1 = e2
   end DO
-  energy = e2
+  energy = e1
   IF ( iam == 0 ) write(6,'(A,A,A,I4,A,I5)') '  ', label, ' Newton steps:', it, '   residual evaluations:', nres
 
-  CALL check_gs_converged(converged, label)
+  IF ( .not. stage ) CALL check_gs_converged(converged, label)
 
 end SUBROUTINE cc_newton
 
@@ -1118,13 +1142,15 @@ SUBROUTINE t3_denom
   IMPLICIT NONE
   INTEGER :: ch3, ch1,ch2, bra,ket, bra0,ket0
   INTEGER :: ket_confs, bra_min,bra_max
-  INTEGER :: a,b,c, i,j,k, cind1,kind1
+  INTEGER :: a,b,c, i,j,k, cind1,kind1, lab
   INTEGER(i8) :: npos
   REAL(dp) :: dmin, dmax
   COMPLEX(dpc) :: denom
   COMPLEX(t3c), POINTER :: wk(:,:)
+  LOGICAL :: ramp
 
   CALL assert_built('t3',   't3_denom')
+  ramp = ( t3_stage < t3_cut )
   CALL assert_built('hbar', 't3_denom')
 
   IF ( iam == 0 ) WRITE(6,*) "...Collecting T3..."
@@ -1157,7 +1183,7 @@ SUBROUTINE t3_denom
               end IF
            end IF
 
-           !$omp parallel default(shared) private(wk, bra, bra0, a, b, ket, ket0, i, j, denom) &
+           !$omp parallel default(shared) private(wk, bra, bra0, a, b, ket, ket0, i, j, denom, lab) &
            !$omp reduction(min:dmin) reduction(max:dmax) reduction(+:npos)
            ! Each thread gets its own pointer descriptor via PRIVATE
            wk => t3_ccm(ch3)%val2(cind1,kind1)%cval
@@ -1167,6 +1193,7 @@ SUBROUTINE t3_denom
               a    = lookup_2b_configs(3,ch1)%ival2(1,bra0)
               b    = lookup_2b_configs(3,ch1)%ival2(2,bra0)
               IF ( a == c .or. b == c ) cycle
+              IF ( ramp ) lab = lev3b(a,b,c)
               DO ket  = 1, ket_confs
                  ket0 = hh_config_t3(ch3)%ival1(ch2)%ival1(ket)
                  i    = lookup_2b_configs(1,ch2)%ival2(1,ket0)
@@ -1180,6 +1207,10 @@ SUBROUTINE t3_denom
                  dmax = MAX(dmax, REAL(denom))
                  IF ( REAL(denom) > 0.0_dp ) npos = npos + 1
                  wk(bra,ket) = wk(bra,ket)/denom
+                 ! t3_ramp stage: only the T3 inside the stage cut
+                 IF ( ramp ) then
+                    IF ( lab > t3_stage+3 .or. lev3b(i,j,k) > t3_stage+3 ) wk(bra,ket) = 0.0
+                 end IF
               end DO
            end DO
            !$omp end do

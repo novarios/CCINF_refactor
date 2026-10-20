@@ -71,6 +71,7 @@ MODULE constants
   COMPLEX(dpc) :: e0, ecorr2, ecorr3, ecorr, eccdt
   LOGICAL :: t3_switch, pre_gs0
   LOGICAL :: gs_converged = .TRUE.
+  INTEGER :: t3_stage = 1000   ! current t3_ramp cut: T3 above it is zeroed in t3_denom
   INTEGER, DIMENSION(-1:1), PUBLIC :: NF2
   CHARACTER(len=80) :: cc_file0, interaction
   ! eom stuff
@@ -98,6 +99,7 @@ MODULE constants
   INTEGER, PUBLIC :: cc_approx=0               ;namelist /args/ cc_approx
   INTEGER, PUBLIC :: tnf_approx=0              ;namelist /args/ tnf_approx
   INTEGER, PUBLIC :: t3_cut=1000               ;namelist /args/ t3_cut
+  INTEGER, PUBLIC :: t3_ramp(10)=0             ;namelist /args/ t3_ramp ! ascending cuts < t3_cut
   INTEGER, PUBLIC :: add_n=0                   ;namelist /args/ add_n
   INTEGER, PUBLIC :: add_p=0                   ;namelist /args/ add_p
   INTEGER, PUBLIC :: eom_approx=0              ;namelist /args/ eom_approx
@@ -696,14 +698,24 @@ CONTAINS
 
   FUNCTION cut3b(p,q,r) result(tf)
     USE constants
-    USE single_particle_orbits    
+    IMPLICIT NONE
+    INTEGER, INTENT(IN) :: p,q,r
+    LOGICAL :: tf
+
+    tf = ( lev3b(p,q,r) > cut_3b+3 )
+
+  end FUNCTION cut3b
+
+  ! 3-body excitation level that the t3_cut compares against (cut + 3)
+  FUNCTION lev3b(p,q,r) result(lev)
+    USE constants
+    USE single_particle_orbits
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: p,q,r
     INTEGER :: Np2, Nq2, Nr2
     INTEGER :: tzp, tzq, tzr
-    LOGICAL :: tf
+    INTEGER :: lev
 
-    tf = .false.
     tzp = all_orbit%tz(p)
     tzq = all_orbit%tz(q)
     tzr = all_orbit%tz(r)
@@ -713,9 +725,9 @@ CONTAINS
     IF ( Np2 <= 0 ) Np2 = abs(Np2) + 1
     IF ( Nq2 <= 0 ) Nq2 = abs(Nq2) + 1
     IF ( Nr2 <= 0 ) Nr2 = abs(Nr2) + 1
-    IF ( Np2 + Nq2 + Nr2 > cut_3b+3 ) tf = .true.
-    
-  end FUNCTION cut3b
+    lev = Np2 + Nq2 + Nr2
+
+  end FUNCTION lev3b
 
   ! r+pq = ch3
   FUNCTION get_ch_ch3(nx3,ny3,nz3,tz3,struct,p) result(ch)
