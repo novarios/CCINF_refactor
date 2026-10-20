@@ -142,6 +142,11 @@ MODULE diis_mod
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: t2_diisd
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: diis_mat
   COMPLEX(dpc), PUBLIC, allocatable, dimension(:)   :: sol_vect
+  ! Newton-Krylov: the last GMRES basis (slices) and Hessenberg matrix, kept so trust-region
+  ! steps of any radius can be re-solved without new J.v products
+  INTEGER, PUBLIC :: kry_m
+  REAL(dp), PUBLIC :: kry_beta
+  COMPLEX(dpc), PUBLIC, allocatable, dimension(:,:) :: kry_v, kry_h
 end module diis_mod
 
 

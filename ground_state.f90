@@ -132,11 +132,12 @@ SUBROUTINE ccdt_iter
 END SUBROUTINE ccdt_iter
 
 
-! Solve F(T2) = g(T2) - T2 = 0 from the current T2 (T3 too when t3_switch) by Newton-Krylov:
-! GMRES for J.dx = -F, then T2 <- T2 + alpha.dx with alpha halved until |F|_2 drops enough
-! (a damped Jacobi step if it never does). |F|_2 is what GMRES reduces, so it is the line-search
-! merit; convergence is max|F| < res_tol. Then n_polish ordinary mixed/DIIS iterations.
-! Returns the CC energy of the final T2.
+! Solve F(T2) = g(T2) - T2 = 0 from the current T2 (T3 too when t3_switch) by Newton-Krylov
+! with a trust region: GMRES for J.dx = -F, then the Levenberg-Marquardt step in that Krylov
+! space with |dx| <= radius. ratio = actual/predicted drop of |F|_2 accepts the step (> 0.1)
+! and grows or shrinks the radius; a rejected step shrinks it and is re-solved without new J.v.
+! After max_try rejections, a damped Jacobi step. Converged when max|F| < res_tol; then n_polish
+! ordinary mixed/DIIS iterations. Returns the CC energy of the final T2.
 SUBROUTINE cc_newton(label, energy)
   USE parallel
   USE constants
@@ -145,10 +146,10 @@ SUBROUTINE cc_newton(label, energy)
   IMPLICIT NONE
   CHARACTER(len=*), INTENT(IN) :: label
   COMPLEX(dpc), INTENT(OUT) :: energy
-  INTEGER, PARAMETER :: max_newton = 30, m_max = 20, max_halve = 4, n_polish = 3
+  INTEGER, PARAMETER :: max_newton = 30, m_max = 20, max_try = 5, n_polish = 3
   REAL(dp), PARAMETER :: res_tol = 1.d-8, eta = 1.d-2
   INTEGER :: it, k, nmv, nres, count
-  REAL(dp) :: rnorm, rtrial, alpha, fn, fnt
+  REAL(dp) :: rnorm, rtrial, fn, fnt, radius, dxn, pred, ratio
   COMPLEX(dpc) :: e1, e2, d
   LOGICAL :: converged, accepted
   CHARACTER(len=6) :: step
@@ -175,41 +176,48 @@ SUBROUTINE cc_newton(label, energy)
        ' ...Newton    ', 0, '   E/A =', REAL(e1)/below_ef, '   res = ', rnorm, '   |F| = ', fn
 
   it = 0
+  radius = 2.d0*fn   ! about 2.7 Jacobi steps
   converged = ( rnorm < res_tol )
   DO WHILE ( .not. converged .and. it < max_newton )
      it = it + 1
-     CALL cc_gmres(x, f, dx, eta, m_max, it, nmv)
+     CALL cc_gmres(x, f, eta, m_max, it, nmv)
      nres = nres + nmv
 
-     ! Backtracking on |F|_2 with a sufficient-decrease test
      step = 'Newton'
-     alpha = 1.d0
-     DO k = 0, max_halve
-        xt = x + alpha*dx
+     accepted = .FALSE.
+     DO k = 1, max_try
+        CALL cc_tr_step(radius, dx, dxn, pred)
+        xt = x + dx
         CALL t2_set(xt)
         CALL cc_residual(rtrial)
         CALL t2_slice(ft, 2)
         CALL slice_dot(ft, ft, d)
         fnt = SQRT(REAL(d))
         nres = nres + 1
-        accepted = ( fnt <= (1.d0 - 1.d-4*alpha)*fn )
-        IF ( iam == 0 ) write(6,'(A,I4,A,F8.5,A,ES11.3,A,ES11.3,A,L2)') ' ...Line search step', it, &
-             '   alpha', alpha, '   |F| =', fnt, '   res =', rtrial, '   accepted', accepted
-        IF ( accepted ) EXIT
-        alpha = 0.5d0*alpha
+        ratio = -1.d0
+        IF ( fn - pred > 0.d0 ) ratio = (fn - fnt)/(fn - pred)
+        accepted = ( ratio > 0.1d0 )
+        IF ( iam == 0 ) write(6,'(A,I4,A,ES10.3,A,ES10.3,A,ES11.3,A,ES11.3,A,ES11.3,A,F8.3,A,L2)') &
+             ' ...Trust step', it, '   radius', radius, '   |dx|', dxn, '   |F| =', fnt, '   pred', pred, &
+             '   res =', rtrial, '   ratio', ratio, '   accepted', accepted
+        IF ( accepted ) then
+           IF ( ratio > 0.75d0 .and. dxn > 0.9d0*radius ) radius = 2.d0*radius
+           IF ( ratio < 0.25d0 ) radius = 0.5d0*dxn
+           EXIT
+        end IF
+        radius = 0.25d0*dxn
      end DO
      IF ( .not. accepted ) then
         step = 'Jacobi'
-        alpha = 1.d0 - cc_scale
-        xt = x + alpha*f
+        xt = x + (1.d0 - cc_scale)*f
         CALL t2_set(xt)
         CALL cc_residual(rtrial)
         CALL t2_slice(ft, 2)
         CALL slice_dot(ft, ft, d)
         fnt = SQRT(REAL(d))
         nres = nres + 1
-        IF ( iam == 0 ) write(6,'(A,I4,A,F8.5,A,ES11.3,A,ES11.3)') ' ...Jacobi      step', it, &
-             '   alpha', alpha, '   |F| =', fnt, '   res =', rtrial
+        IF ( iam == 0 ) write(6,'(A,I4,A,F6.3,A,ES11.3,A,ES11.3)') ' ...Jacobi      step', it, &
+             '   alpha', 1.d0 - cc_scale, '   |F| =', fnt, '   res =', rtrial
      end IF
 
      x = xt
@@ -217,13 +225,14 @@ SUBROUTINE cc_newton(label, energy)
      fn = fnt
      rnorm = rtrial
      CALL cc_energy(e2, .false.)
-     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3,A9,ES11.3,A3,A6,A8,F7.4,A8,I3)') &
+     IF ( iam == 0 ) write(6,'(A14,I4,A8,F16.10,A8,ES11.3,A9,ES11.3,A9,ES11.3,A3,A6,A8,ES10.3,A8,I3)') &
           ' ...Newton    ', it, '   E/A =', REAL(e2)/below_ef, '   dE = ', ABS(e2-e1), '   res = ', rnorm, &
-          '   |F| = ', fn, '   ', step, '  alpha', alpha, '   J.v =', nmv
+          '   |F| = ', fn, '   ', step, '   |dx|', dxn, '   J.v =', nmv
      IF ( iam == 0 ) write(6,*)
      e1 = e2
      converged = ( rnorm < res_tol )
   end DO
+  CALL kry_free
   DEALLOCATE( x, f, dx, xt, ft )
 
   ! A few ordinary iterations; t2_ccm_eqn already holds g(t2_ccm)

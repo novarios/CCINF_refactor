@@ -327,10 +327,12 @@ SUBROUTINE cc_jv(x0, f0, xnorm, v, jv)
 end SUBROUTINE cc_jv
 
 
-! GMRES for the Newton step J.delta = -f0 at x0, stopped when the least-squares residual is
-! below eta.|f0| or after m_max products. nmv returns the number of J.v products used; it is
-! the Newton step number, for the printout. Leaves t2_ccm at the last probe point.
-SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, it, nmv)
+! GMRES (Arnoldi) for the Newton step J.dx = -f0 at x0, stopped when the least-squares
+! residual is below eta.|f0| or after m_max products. Keeps the basis and Hessenberg matrix in
+! kry_v/kry_h (kry_m = nmv products) for cc_tr_step, and prints the Ritz values of J with the
+! smallest and largest modulus. it is the Newton step, for the printout. Leaves t2_ccm at the
+! last probe point.
+SUBROUTINE cc_gmres(x0, f0, eta, m_max, it, nmv)
   USE parallel
   USE constants
   USE diis_mod
@@ -338,48 +340,51 @@ SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, it, nmv)
 
   IMPLICIT NONE
   COMPLEX(dpc), INTENT(IN) :: x0(diis_lo:diis_hi), f0(diis_lo:diis_hi)
-  COMPLEX(dpc), INTENT(OUT) :: delta(diis_lo:diis_hi)
   REAL(dp), INTENT(IN) :: eta
   INTEGER, INTENT(IN) :: m_max, it
   INTEGER, INTENT(OUT) :: nmv
   INTEGER :: i, j, pass, info, lwork
   REAL(dp) :: xnorm, beta, hn, resid
-  COMPLEX(dpc) :: d
-  COMPLEX(dpc), ALLOCATABLE :: vk(:,:), h(:,:), a(:,:), b(:), work(:)
+  COMPLEX(dpc) :: d, vdum(1,1)
+  REAL(dp), ALLOCATABLE :: rwork(:)
+  COMPLEX(dpc), ALLOCATABLE :: h(:,:), a(:,:), b(:), work(:), ritz(:)
 
-  ALLOCATE( vk(diis_lo:diis_hi, 0:m_max) )
+  CALL kry_free
+  ALLOCATE( kry_v(diis_lo:diis_hi, 0:m_max) )
   CALL mem_register('t2', REAL(diis_counts(iam),dp) * (m_max+1) * 16.0_dp)
-  ALLOCATE( h(m_max+1, m_max), a(m_max+1, m_max), b(m_max+1) )
+  ALLOCATE( kry_h(m_max+1, m_max) )
+  ALLOCATE( a(m_max+1, m_max), b(m_max+1) )
   lwork = 64*(m_max+1)
   ALLOCATE( work(lwork) )
-  h = 0.0_dp
+  kry_h = 0.0_dp
 
   CALL slice_dot(x0, x0, d)
   xnorm = SQRT(REAL(d))
   CALL slice_dot(f0, f0, d)
   beta = SQRT(REAL(d))
-  vk(:,0) = -f0 / beta
+  kry_beta = beta
+  kry_v(:,0) = -f0 / beta
 
   b = 0.0_dp
   nmv = 0
   DO j = 1, m_max
-     CALL cc_jv(x0, f0, xnorm, vk(:,j-1), vk(:,j))
+     CALL cc_jv(x0, f0, xnorm, kry_v(:,j-1), kry_v(:,j))
      nmv = j
      ! Arnoldi, modified Gram-Schmidt done twice
      DO pass = 1, 2
         DO i = 0, j-1
-           CALL slice_dot(vk(:,i), vk(:,j), d)
-           h(i+1,j) = h(i+1,j) + d
-           vk(:,j) = vk(:,j) - d*vk(:,i)
+           CALL slice_dot(kry_v(:,i), kry_v(:,j), d)
+           kry_h(i+1,j) = kry_h(i+1,j) + d
+           kry_v(:,j) = kry_v(:,j) - d*kry_v(:,i)
         end DO
      end DO
-     CALL slice_dot(vk(:,j), vk(:,j), d)
+     CALL slice_dot(kry_v(:,j), kry_v(:,j), d)
      hn = SQRT(REAL(d))
-     h(j+1,j) = hn
-     IF ( hn > 1.d-14*beta ) vk(:,j) = vk(:,j) / hn
+     kry_h(j+1,j) = hn
+     IF ( hn > 1.d-14*beta ) kry_v(:,j) = kry_v(:,j) / hn
 
      ! min | beta.e1 - H y | over the (j+1) x j Hessenberg matrix
-     a(1:j+1,1:j) = h(1:j+1,1:j)
+     a(1:j+1,1:j) = kry_h(1:j+1,1:j)
      b = 0.0_dp
      b(1) = beta
      CALL ZGELS('N', j+1, j, 1, a, m_max+1, b, m_max+1, work, lwork, info)
@@ -387,13 +392,109 @@ SUBROUTINE cc_gmres(x0, f0, delta, eta, m_max, it, nmv)
      IF ( iam == 0 ) write(6,'(A,I4,A,I4,A,ES11.3)') ' ...GMRES        step', it, '   j', j, '   |r|/|F| =', resid/beta
      IF ( resid <= eta*beta .or. hn <= 1.d-14*beta ) EXIT
   end DO
+  kry_m = nmv
 
-  delta = 0.0_dp
-  DO i = 1, nmv
-     delta = delta + b(i)*vk(:,i-1)
-  end DO
+  ! Ritz values of J: eigenvalues of the square nmv x nmv Hessenberg block
+  ALLOCATE( ritz(nmv), rwork(2*nmv) )
+  a(1:nmv,1:nmv) = kry_h(1:nmv,1:nmv)
+  CALL ZGEEV('N', 'N', nmv, a, m_max+1, ritz, vdum, 1, vdum, 1, work, lwork, rwork, info)
+  IF ( iam == 0 ) write(6,'(A,I4,A,2ES11.3,A,ES11.3)') ' ...GMRES        step', it, &
+       '   Ritz(J): smallest', ritz(MINLOC(ABS(ritz),1)), '   largest |.|', MAXVAL(ABS(ritz))
 
-  DEALLOCATE( vk, h, a, b, work )
-  CALL mem_release('t2', REAL(diis_counts(iam),dp) * (m_max+1) * 16.0_dp)
+  DEALLOCATE( a, b, work, ritz, rwork )
 
 end SUBROUTINE cc_gmres
+
+
+SUBROUTINE kry_free
+  USE parallel
+  USE constants
+  USE diis_mod
+  USE mem_tracker
+
+  IMPLICIT NONE
+  IF ( .not. ALLOCATED(kry_v) ) RETURN
+  CALL mem_release('t2', REAL(diis_counts(iam),dp) * SIZE(kry_v,2) * 16.0_dp)
+  DEALLOCATE( kry_v, kry_h )
+end SUBROUTINE kry_free
+
+
+! Levenberg-Marquardt solve in the last Krylov space: y minimizes |beta.e1 - H y|^2 + mu^2 |y|^2;
+! pred = |beta.e1 - H y|, the |F|_2 the linear model predicts after the step.
+SUBROUTINE kry_ls(mu, y, pred)
+  USE constants
+  USE diis_mod
+
+  IMPLICIT NONE
+  REAL(dp), INTENT(IN) :: mu
+  COMPLEX(dpc), INTENT(OUT) :: y(kry_m)
+  REAL(dp), INTENT(OUT) :: pred
+  INTEGER :: m, i, info, lwork
+  COMPLEX(dpc), ALLOCATABLE :: a(:,:), b(:), r(:), work(:)
+
+  m = kry_m
+  lwork = 64*(2*m+1)
+  ALLOCATE( a(2*m+1, m), b(2*m+1), r(m+1), work(lwork) )
+  a = 0.0_dp
+  a(1:m+1,1:m) = kry_h(1:m+1,1:m)
+  DO i = 1, m
+     a(m+1+i,i) = mu
+  end DO
+  b = 0.0_dp
+  b(1) = kry_beta
+  CALL ZGELS('N', 2*m+1, m, 1, a, 2*m+1, b, 2*m+1, work, lwork, info)
+  y = b(1:m)
+  r = -MATMUL(kry_h(1:m+1,1:m), y)
+  r(1) = r(1) + kry_beta
+  pred = SQRT(SUM(ABS(r)**2))
+  DEALLOCATE( a, b, r, work )
+
+end SUBROUTINE kry_ls
+
+
+! Trust-region step in the last Krylov space: the GMRES step if |dx| <= radius, otherwise the
+! Levenberg-Marquardt step with |dx| = radius (mu by bisection). This damps the near-singular
+! directions of J and keeps the rest of the Newton step. dxn = |dx|, pred as in kry_ls.
+SUBROUTINE cc_tr_step(radius, dx, dxn, pred)
+  USE constants
+  USE diis_mod
+
+  IMPLICIT NONE
+  REAL(dp), INTENT(IN) :: radius
+  COMPLEX(dpc), INTENT(OUT) :: dx(diis_lo:diis_hi)
+  REAL(dp), INTENT(OUT) :: dxn, pred
+  INTEGER :: i, k
+  REAL(dp) :: mu, lo, hi
+  COMPLEX(dpc), ALLOCATABLE :: y(:)
+
+  ALLOCATE( y(kry_m) )
+  CALL kry_ls(0.d0, y, pred)
+  dxn = SQRT(SUM(ABS(y)**2))   ! the basis is orthonormal, so |dx| = |y|
+  IF ( dxn > radius ) then
+     lo = 0.d0
+     hi = MAX(1.d-12, MAXVAL(ABS(kry_h(1:kry_m+1,1:kry_m))))
+     DO
+        CALL kry_ls(hi, y, pred)
+        IF ( SQRT(SUM(ABS(y)**2)) <= radius ) EXIT
+        hi = 2.d0*hi
+     end DO
+     DO k = 1, 60
+        mu = 0.5d0*(lo + hi)
+        CALL kry_ls(mu, y, pred)
+        dxn = SQRT(SUM(ABS(y)**2))
+        IF ( ABS(dxn - radius) < 1.d-3*radius ) EXIT
+        IF ( dxn > radius ) then
+           lo = mu
+        else
+           hi = mu
+        end IF
+     end DO
+  end IF
+
+  dx = 0.0_dp
+  DO i = 1, kry_m
+     dx = dx + y(i)*kry_v(:,i-1)
+  end DO
+  DEALLOCATE( y )
+
+end SUBROUTINE cc_tr_step
